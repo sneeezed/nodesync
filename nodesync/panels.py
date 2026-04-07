@@ -14,6 +14,14 @@ def _active_root(scene) -> str:
     return scene.nodesync_project_root.strip()
 
 
+def _branch_color_for(name: str, scene) -> tuple | None:
+    """Look up the color saved for a branch name in the branch list."""
+    for item in scene.nodesync_branch_list:
+        if item.name == name:
+            return tuple(item.color)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # UIList — commit history
 # ---------------------------------------------------------------------------
@@ -25,9 +33,23 @@ class NODESYNC_UL_history(bpy.types.UIList):
                   active_data, active_propname, index, flt_flag):
         if self.layout_type in {'DEFAULT', 'COMPACT'}:
             row = layout.row(align=True)
+
+            # Branch decoration tags (colored labels)
+            if item.decorations:
+                for dec_name in item.decorations.split(','):
+                    dec_name = dec_name.strip()
+                    if not dec_name:
+                        continue
+                    color = _branch_color_for(dec_name, context.scene)
+                    sub = row.row(align=True)
+                    sub.scale_x = 0.7
+                    # Show a colored label; use alert tinting for branch origin tags
+                    sub.alert = (dec_name.startswith('origin/'))
+                    sub.label(text=dec_name, icon='BOOKMARKS')
+
             row.label(text=f"{item.hash}", icon='FILE_TICK')
             col = row.column()
-            col.label(text=item.subject[:35] + ('…' if len(item.subject) > 35 else ''))
+            col.label(text=item.subject[:30] + ('…' if len(item.subject) > 30 else ''))
             col = row.column()
             col.scale_x = 0.6
             col.label(text=item.date)
@@ -35,6 +57,37 @@ class NODESYNC_UL_history(bpy.types.UIList):
             op.commit_hash = item.full_hash
         elif self.layout_type == 'GRID':
             layout.label(text=item.hash)
+
+    def filter_items(self, context, data, propname):
+        items = getattr(data, propname)
+        flt_flags = [self.bitflag_filter_item] * len(items)
+        flt_neworder = list(range(len(items)))
+        return flt_flags, flt_neworder
+
+
+# ---------------------------------------------------------------------------
+# UIList — branches
+# ---------------------------------------------------------------------------
+
+class NODESYNC_UL_branches(bpy.types.UIList):
+    bl_idname = 'NODESYNC_UL_branches'
+
+    def draw_item(self, context, layout, data, item, icon,
+                  active_data, active_propname, index, flt_flag):
+        if self.layout_type in {'DEFAULT', 'COMPACT'}:
+            row = layout.row(align=True)
+            # Color swatch
+            row.prop(item, 'color', text='')
+            is_current = (item.name == context.scene.nodesync_current_branch)
+            row.label(
+                text=item.name,
+                icon='LAYER_ACTIVE' if is_current else 'LAYER_USED',
+            )
+            if not is_current:
+                op = row.operator('nodesync.switch_branch', text='', icon='LOOP_FORWARDS')
+                op.branch_name = item.name
+        elif self.layout_type == 'GRID':
+            layout.label(text=item.name)
 
     def filter_items(self, context, data, propname):
         items = getattr(data, propname)
@@ -86,19 +139,41 @@ class NODE_PT_nodesync_project(bpy.types.Panel):
         row.prop(scene, 'nodesync_project_root', text='')
         row.operator('nodesync.open_project', text='', icon='FILE_FOLDER')
 
-        # Action buttons
-        row = layout.row(align=True)
-        row.operator('nodesync.init_project', text='Init Project', icon='NEWFOLDER')
+        # Action buttons — Clone is the primary action for connecting to an existing repo
+        col = layout.column(align=True)
+        col.scale_y = 1.2
+        col.operator('nodesync.clone_from_github', icon='IMPORT')
+        col.operator('nodesync.init_project', text='Init New Project', icon='NEWFOLDER')
 
         # Status — only show once a valid project is set
         if root and os.path.isdir(root):
             box = layout.box()
             col = box.column(align=True)
-
-            # Show blend file link if saved
             blend = bpy.data.filepath
             if blend:
                 col.label(text=os.path.basename(blend), icon='FILE_BLEND')
+
+            layout.separator()
+
+            # GitHub / Remote section
+            layout.label(text='GitHub', icon='URL')
+            row = layout.row(align=True)
+            row.prop(scene, 'nodesync_remote_url', text='', placeholder='https://github.com/user/repo')
+            row.operator('nodesync.set_remote', text='', icon='CHECKMARK')
+
+            row = layout.row(align=True)
+            row.scale_y = 1.2
+            push_op = row.operator('nodesync.push', text='Push ↑', icon='EXPORT')
+            pull_op = row.operator('nodesync.pull', text='Pull ↓', icon='IMPORT')
+
+            if scene.nodesync_sync_status:
+                status = scene.nodesync_sync_status
+                is_error = 'failed' in status.lower() or 'conflict' in status.lower()
+                box2 = layout.box()
+                box2.alert = is_error
+                box2.label(text=status,
+                           icon='ERROR' if is_error else 'INFO')
+
         elif root:
             layout.label(text='Folder not found', icon='ERROR')
 
@@ -153,6 +228,116 @@ class NODE_PT_nodesync_vc(bpy.types.Panel):
             row.operator('nodesync.diff_legend', text='', icon='QUESTION')
 
 
+# ---------------------------------------------------------------------------
+# Branches section
+# ---------------------------------------------------------------------------
+
+class NODE_PT_nodesync_branches(bpy.types.Panel):
+    bl_idname      = 'NODE_PT_nodesync_branches'
+    bl_parent_id   = 'NODE_PT_nodesync'
+    bl_label       = 'Branches'
+    bl_space_type  = 'NODE_EDITOR'
+    bl_region_type = 'UI'
+    bl_options     = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
+        layout = self.layout
+        scene  = context.scene
+        root   = _active_root(scene)
+
+        if not root:
+            layout.label(text='Initialize a project first', icon='ERROR')
+            return
+
+        # Current branch + create button
+        row = layout.row(align=True)
+        row.label(
+            text=f"Current: {scene.nodesync_current_branch or '—'}",
+            icon='BOOKMARKS',
+        )
+        row.operator('nodesync.create_branch', text='', icon='ADD')
+
+        if not scene.nodesync_branch_list:
+            layout.label(text='No branches found', icon='INFO')
+            return
+
+        layout.template_list(
+            'NODESYNC_UL_branches', '',
+            scene, 'nodesync_branch_list',
+            scene, 'nodesync_branch_index',
+            rows=min(5, len(scene.nodesync_branch_list)),
+        )
+
+        # Color picker for selected branch
+        idx = scene.nodesync_branch_index
+        if 0 <= idx < len(scene.nodesync_branch_list):
+            item = scene.nodesync_branch_list[idx]
+            box  = layout.box()
+            row  = box.row(align=True)
+            row.label(text=item.name, icon='BOOKMARKS')
+            row.prop(item, 'color', text='')
+
+
+# ---------------------------------------------------------------------------
+# Conflicts section (only visible when there are active conflicts)
+# ---------------------------------------------------------------------------
+
+class NODE_PT_nodesync_conflicts(bpy.types.Panel):
+    bl_idname      = 'NODE_PT_nodesync_conflicts'
+    bl_parent_id   = 'NODE_PT_nodesync'
+    bl_label       = 'Merge Conflicts'
+    bl_space_type  = 'NODE_EDITOR'
+    bl_region_type = 'UI'
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene.nodesync_has_conflicts
+
+    def draw(self, context):
+        layout = self.layout
+        scene  = context.scene
+
+        total    = len(scene.nodesync_conflict_items)
+        resolved = sum(1 for i in scene.nodesync_conflict_items if i.resolved)
+
+        # Header warning
+        box = layout.box()
+        box.alert = True
+        box.label(
+            text=f"Resolve {total - resolved} of {total} conflict(s)",
+            icon='ERROR',
+        )
+
+        layout.separator()
+
+        # Per-file conflict rows
+        for item in scene.nodesync_conflict_items:
+            row = layout.row(align=True)
+            if item.resolved:
+                row.label(text=item.group_name, icon='CHECKMARK')
+            else:
+                row.label(text=item.group_name, icon='QUESTION')
+                op_mine   = row.operator('nodesync.resolve_conflict',
+                                         text='Keep Mine', icon='FILE_TICK')
+                op_mine.filepath = item.filepath
+                op_mine.strategy = 'ours'
+
+                op_theirs = row.operator('nodesync.resolve_conflict',
+                                          text='Use Remote', icon='IMPORT')
+                op_theirs.filepath = item.filepath
+                op_theirs.strategy = 'theirs'
+
+        layout.separator()
+
+        # Complete / Abort
+        row = layout.row(align=True)
+        row.scale_y = 1.3
+        complete = row.operator('nodesync.complete_merge', icon='CHECKMARK')
+        abort    = row.operator('nodesync.abort_merge',   icon='X')
+
+        if resolved < total:
+            layout.label(text='Resolve all conflicts to complete merge', icon='INFO')
+
 
 # ---------------------------------------------------------------------------
 # History section
@@ -197,6 +382,8 @@ class NODE_PT_nodesync_history(bpy.types.Panel):
             col.label(text=item.hash,    icon='FILE_TICK')
             col.label(text=item.subject, icon='NONE')
             col.label(text=f"{item.author}  {item.date}", icon='NONE')
+            if item.decorations:
+                col.label(text=item.decorations.replace(',', '  '), icon='BOOKMARKS')
 
 
 # ---------------------------------------------------------------------------
@@ -205,8 +392,11 @@ class NODE_PT_nodesync_history(bpy.types.Panel):
 
 classes = [
     NODESYNC_UL_history,
+    NODESYNC_UL_branches,
     NODE_PT_nodesync,
     NODE_PT_nodesync_project,
     NODE_PT_nodesync_vc,
+    NODE_PT_nodesync_branches,
+    NODE_PT_nodesync_conflicts,
     NODE_PT_nodesync_history,
 ]

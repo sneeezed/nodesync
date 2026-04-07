@@ -16,6 +16,30 @@ import bpy
 import os
 from bpy.app.handlers import persistent
 
+
+# ---------------------------------------------------------------------------
+# Addon Preferences — GitHub token storage
+# ---------------------------------------------------------------------------
+
+class NodeSyncPreferences(bpy.types.AddonPreferences):
+    bl_idname = __name__
+
+    github_token: bpy.props.StringProperty(
+        name        = 'GitHub Personal Access Token',
+        description = ('Classic PAT with repo scope from github.com → '
+                       'Settings → Developer settings → Personal access tokens'),
+        subtype     = 'PASSWORD',
+        default     = '',
+    )
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text='GitHub Authentication', icon='URL')
+        box = layout.box()
+        box.prop(self, 'github_token')
+        if not self.github_token:
+            box.label(text='Token required for Push / Pull', icon='ERROR')
+
 # ---------------------------------------------------------------------------
 # Module reload support (for addon development)
 # ---------------------------------------------------------------------------
@@ -70,6 +94,9 @@ def _nodesync_save_post(*args):
 # ---------------------------------------------------------------------------
 
 def register():
+    # 0. Addon preferences (must be first)
+    bpy.utils.register_class(NodeSyncPreferences)
+
     # 1. PropertyGroup types first (scene props reference them)
     for cls in props.classes:
         bpy.utils.register_class(cls)
@@ -112,5 +139,7 @@ def unregister():
 
     for cls in reversed(props.classes):
         bpy.utils.unregister_class(cls)
+
+    bpy.utils.unregister_class(NodeSyncPreferences)
 
     print("[NodeSync] Addon unregistered")

@@ -63,6 +63,26 @@ class NodeSyncProject:
         self.save_config(cfg)
         return tracked
 
+    def get_remote_url(self) -> str:
+        return self.load_config().get('remote_url', '')
+
+    def set_remote_url(self, url: str):
+        cfg = self.load_config()
+        cfg['remote_url'] = url
+        self.save_config(cfg)
+
+    def get_branch_colors(self) -> dict:
+        """Return dict of branch_name → [r, g, b]."""
+        return self.load_config().get('branch_colors', {})
+
+    def set_branch_color(self, branch_name: str, color):
+        """Save a branch color (list or tuple of 3 floats) to config."""
+        cfg = self.load_config()
+        if 'branch_colors' not in cfg:
+            cfg['branch_colors'] = {}
+        cfg['branch_colors'][branch_name] = list(color)
+        self.save_config(cfg)
+
     # ------------------------------------------------------------------
     # Paths
     # ------------------------------------------------------------------
