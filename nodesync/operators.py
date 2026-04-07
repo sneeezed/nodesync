@@ -237,6 +237,24 @@ class NODESYNC_OT_commit(bpy.types.Operator):
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
 
+        # Auto-push if the preference is enabled and a remote is configured
+        try:
+            prefs = context.preferences.addons[__package__].preferences
+            auto_push = prefs.auto_push_on_commit
+        except Exception:
+            auto_push = False
+
+        if auto_push and scene.nodesync_remote_url.strip():
+            token = _get_token(context)
+            try:
+                branch = repo.current_branch()
+                repo.push(token=token)
+                scene.nodesync_sync_status = 'Pushed OK'
+                self.report({'INFO'}, f"Auto-pushed branch '{branch}' to origin")
+            except GitError as e:
+                scene.nodesync_sync_status = 'Auto-push failed'
+                self.report({'WARNING'}, f"Commit OK but auto-push failed: {e}")
+
         return {'FINISHED'}
 
 

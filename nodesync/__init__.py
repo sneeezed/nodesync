@@ -32,6 +32,13 @@ class NodeSyncPreferences(bpy.types.AddonPreferences):
         default     = '',
     )
 
+    auto_push_on_commit: bpy.props.BoolProperty(
+        name        = 'Auto-Push on Commit',
+        description = ('Automatically push to the remote after every commit '
+                       'when a GitHub remote URL is configured'),
+        default     = False,
+    )
+
     def draw(self, context):
         layout = self.layout
         layout.label(text='GitHub Authentication', icon='URL')
@@ -39,6 +46,9 @@ class NodeSyncPreferences(bpy.types.AddonPreferences):
         box.prop(self, 'github_token')
         if not self.github_token:
             box.label(text='Token required for Push / Pull', icon='ERROR')
+        layout.separator()
+        layout.label(text='Commit Behaviour', icon='FILE_TICK')
+        layout.prop(self, 'auto_push_on_commit')
 
 # ---------------------------------------------------------------------------
 # Module reload support (for addon development)
