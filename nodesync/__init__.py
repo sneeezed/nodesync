@@ -16,6 +16,9 @@ import bpy
 import os
 from bpy.app.handlers import persistent
 
+# Global preview collection — allocated on register, freed on unregister
+_previews = None
+
 
 # ---------------------------------------------------------------------------
 # Addon Preferences — GitHub token storage
@@ -39,6 +42,13 @@ class NodeSyncPreferences(bpy.types.AddonPreferences):
         default     = False,
     )
 
+    screenshot_on_commit: bpy.props.BoolProperty(
+        name        = 'Screenshot Node Editor on Commit',
+        description = ('Capture a screenshot of the Geometry Node editor when '
+                       'committing and show it in the commit history panel'),
+        default     = False,
+    )
+
     def draw(self, context):
         layout = self.layout
         layout.label(text='GitHub Authentication', icon='URL')
@@ -49,6 +59,7 @@ class NodeSyncPreferences(bpy.types.AddonPreferences):
         layout.separator()
         layout.label(text='Commit Behaviour', icon='FILE_TICK')
         layout.prop(self, 'auto_push_on_commit')
+        layout.prop(self, 'screenshot_on_commit')
 
 # ---------------------------------------------------------------------------
 # Module reload support (for addon development)
@@ -104,6 +115,10 @@ def _nodesync_save_post(*args):
 # ---------------------------------------------------------------------------
 
 def register():
+    global _previews
+    import bpy.utils.previews
+    _previews = bpy.utils.previews.new()
+
     # 0. Addon preferences (must be first)
     bpy.utils.register_class(NodeSyncPreferences)
 
@@ -131,6 +146,12 @@ def register():
 
 
 def unregister():
+    global _previews
+    if _previews is not None:
+        import bpy.utils.previews
+        bpy.utils.previews.remove(_previews)
+        _previews = None
+
     # Remove save hook first
     if _nodesync_save_post in bpy.app.handlers.save_post:
         bpy.app.handlers.save_post.remove(_nodesync_save_post)

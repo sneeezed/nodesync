@@ -6,6 +6,24 @@ import bpy
 import os
 
 
+def _get_commit_preview_icon(full_hash: str, root: str) -> int:
+    """Return an icon_id for the commit screenshot, or 0 if none exists."""
+    if not full_hash or not root:
+        return 0
+    png_path = os.path.join(root, 'previews', f'{full_hash}.png')
+    if not os.path.isfile(png_path):
+        return 0
+    try:
+        from . import _previews
+        if _previews is None:
+            return 0
+        if full_hash not in _previews:
+            _previews.load(full_hash, png_path, 'IMAGE')
+        return _previews[full_hash].icon_id
+    except Exception:
+        return 0
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -369,6 +387,12 @@ class NODE_PT_nodesync_history(bpy.types.Panel):
             col.label(text=f"{item.author}  {item.date}", icon='NONE')
             if item.decorations:
                 col.label(text=item.decorations.replace(',', '  '), icon='BOOKMARKS')
+
+            # Screenshot thumbnail — only shown when a preview PNG was saved
+            icon_id = _get_commit_preview_icon(item.full_hash, root)
+            if icon_id:
+                col.separator()
+                col.template_icon(icon_value=icon_id, scale=8.0)
 
 
 # ---------------------------------------------------------------------------

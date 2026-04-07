@@ -241,6 +241,7 @@ class NODESYNC_OT_commit(bpy.types.Operator):
             # Also commit .nodesync config
             repo.add(os.path.join(proj.root, '.nodesync'))
             short_hash = repo.commit(msg)
+            full_hash  = repo.current_commit_hash(short=False)
             scene.nodesync_commit_message = ''
             _refresh_branches(scene, proj.root)
             _refresh_history(scene, proj.root)
@@ -252,6 +253,26 @@ class NODESYNC_OT_commit(bpy.types.Operator):
         except GitError as e:
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
+
+        # Screenshot — only when the preference is enabled
+        try:
+            prefs = context.preferences.addons[__package__].preferences
+            do_screenshot = prefs.screenshot_on_commit
+        except Exception:
+            do_screenshot = False
+
+        if do_screenshot:
+            previews_dir = os.path.join(proj.root, 'previews')
+            os.makedirs(previews_dir, exist_ok=True)
+            png_path = os.path.join(previews_dir, f'{full_hash}.png')
+            try:
+                with context.temp_override(area=context.area):
+                    bpy.ops.screen.screenshot_area(
+                        filepath=png_path,
+                        check_existing=False,
+                    )
+            except Exception as e:
+                self.report({'WARNING'}, f"Commit OK but screenshot failed: {e}")
 
         # Auto-push if the preference is enabled and a remote is configured
         try:
