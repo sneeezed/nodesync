@@ -22,17 +22,18 @@ from bpy.app.handlers import persistent
 
 if 'props' in dir():
     import importlib
-    from . import utils, serializer, deserializer, project, git_ops, props, operators, panels
+    from . import utils, serializer, deserializer, project, git_ops, props, operators, panels, diff
     importlib.reload(utils)
     importlib.reload(serializer)
     importlib.reload(deserializer)
     importlib.reload(project)
     importlib.reload(git_ops)
+    importlib.reload(diff)
     importlib.reload(props)
     importlib.reload(operators)
     importlib.reload(panels)
 else:
-    from . import props, operators, panels
+    from . import props, operators, panels, diff
 
 
 # ---------------------------------------------------------------------------

@@ -126,10 +126,31 @@ class NODE_PT_nodesync_vc(bpy.types.Panel):
         # Commit message
         layout.prop(scene, 'nodesync_commit_message', text='', placeholder='Commit message…')
 
-        # Commit button (full width)
+        # Alert box when diff mode is blocking commits
+        if scene.nodesync_diff_active:
+            box = layout.box()
+            box.alert = True
+            box.label(text='Diff view active — exit before making changes', icon='ERROR')
+
+        # Commit button (full width, disabled while diff is active)
         row = layout.row()
         row.scale_y = 1.3
+        row.enabled = not scene.nodesync_diff_active
         row.operator('nodesync.commit', icon='FILE_TICK')
+
+        layout.separator()
+
+        # Diff toggle
+        if scene.nodesync_diff_active:
+            row = layout.row()
+            row.alert = True
+            row.scale_y = 1.2
+            row.operator('nodesync.exit_diff', icon='HIDE_OFF')
+        else:
+            row = layout.row(align=True)
+            row.scale_y = 1.2
+            row.operator('nodesync.enter_diff', icon='HIDE_ON')
+            row.operator('nodesync.diff_legend', text='', icon='QUESTION')
 
 
 

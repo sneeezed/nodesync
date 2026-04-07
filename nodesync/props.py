@@ -37,6 +37,11 @@ SCENE_PROPS = {
         name        = 'Status',
         default     = '',
     ),
+    'nodesync_diff_active': bpy.props.BoolProperty(
+        name        = 'Diff Mode Active',
+        description = 'Whether the visual diff overlay is currently shown',
+        default     = False,
+    ),
 }
 
 
