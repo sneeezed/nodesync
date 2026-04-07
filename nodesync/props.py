@@ -13,17 +13,26 @@ class NodeSyncCommitItem(bpy.types.PropertyGroup):
     author      : bpy.props.StringProperty()
     date        : bpy.props.StringProperty()
     decorations : bpy.props.StringProperty()  # comma-separated branch names
-
-
-class NodeSyncBranchItem(bpy.types.PropertyGroup):
-    """One branch with a user-assigned display color."""
-    name  : bpy.props.StringProperty()
-    color : bpy.props.FloatVectorProperty(
+    branch_name  : bpy.props.StringProperty()  # branch this commit belongs to
+    color_index  : bpy.props.IntProperty(default=0)  # palette index
+    branch_color : bpy.props.FloatVectorProperty(
         subtype = 'COLOR',
         size    = 3,
         min     = 0.0, max = 1.0,
         default = (0.2, 0.6, 1.0),
     )
+
+
+class NodeSyncBranchItem(bpy.types.PropertyGroup):
+    """One branch with an auto-assigned display color."""
+    name        : bpy.props.StringProperty()
+    color       : bpy.props.FloatVectorProperty(
+        subtype = 'COLOR',
+        size    = 3,
+        min     = 0.0, max = 1.0,
+        default = (0.2, 0.6, 1.0),
+    )
+    color_index : bpy.props.IntProperty(default=0)  # palette index → COLORSET icon
 
 
 class NodeSyncConflictItem(bpy.types.PropertyGroup):
@@ -99,12 +108,10 @@ SCENE_PROPS = {
         description = 'Name for the new branch',
         default     = '',
     ),
-    'nodesync_new_branch_color': bpy.props.FloatVectorProperty(
-        name        = 'Branch Color',
-        subtype     = 'COLOR',
-        size        = 3,
-        min         = 0.0, max = 1.0,
-        default     = (0.2, 0.6, 1.0),
+    # HEAD tracking (full hash of current HEAD commit)
+    'nodesync_head_hash': bpy.props.StringProperty(
+        name    = 'HEAD Hash',
+        default = '',
     ),
     # Conflicts
     'nodesync_has_conflicts': bpy.props.BoolProperty(

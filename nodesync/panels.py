@@ -14,13 +14,6 @@ def _active_root(scene) -> str:
     return scene.nodesync_project_root.strip()
 
 
-def _branch_color_for(name: str, scene) -> tuple | None:
-    """Look up the color saved for a branch name in the branch list."""
-    for item in scene.nodesync_branch_list:
-        if item.name == name:
-            return tuple(item.color)
-    return None
-
 
 # ---------------------------------------------------------------------------
 # UIList — commit history
@@ -34,18 +27,16 @@ class NODESYNC_UL_history(bpy.types.UIList):
         if self.layout_type in {'DEFAULT', 'COMPACT'}:
             row = layout.row(align=True)
 
-            # Branch decoration tags (colored labels)
-            if item.decorations:
-                for dec_name in item.decorations.split(','):
-                    dec_name = dec_name.strip()
-                    if not dec_name:
-                        continue
-                    color = _branch_color_for(dec_name, context.scene)
-                    sub = row.row(align=True)
-                    sub.scale_x = 0.7
-                    # Show a colored label; use alert tinting for branch origin tags
-                    sub.alert = (dec_name.startswith('origin/'))
-                    sub.label(text=dec_name, icon='BOOKMARKS')
+            # Bookmark icon on the HEAD commit (where the next commit will land)
+            head_hash = getattr(context.scene, 'nodesync_head_hash', '')
+            is_head = bool(item.full_hash and item.full_hash == head_hash)
+            row.label(text='', icon='BOOKMARKS' if is_head else 'BLANK1')
+
+            # Branch color swatch — disabled so it shows color without opening the picker
+            sub = row.row(align=True)
+            sub.enabled = False
+            sub.scale_x = 0.35
+            sub.prop(item, 'branch_color', text='')
 
             row.label(text=f"{item.hash}", icon='FILE_TICK')
             col = row.column()
@@ -76,8 +67,11 @@ class NODESYNC_UL_branches(bpy.types.UIList):
                   active_data, active_propname, index, flt_flag):
         if self.layout_type in {'DEFAULT', 'COMPACT'}:
             row = layout.row(align=True)
-            # Color swatch
-            row.prop(item, 'color', text='')
+            # Color swatch — disabled so it's display-only (slightly dimmed, not clickable)
+            sub = row.row(align=True)
+            sub.enabled = False
+            sub.scale_x = 0.35
+            sub.prop(item, 'color', text='')
             is_current = (item.name == context.scene.nodesync_current_branch)
             row.label(
                 text=item.name,
@@ -267,15 +261,6 @@ class NODE_PT_nodesync_branches(bpy.types.Panel):
             scene, 'nodesync_branch_index',
             rows=min(5, len(scene.nodesync_branch_list)),
         )
-
-        # Color picker for selected branch
-        idx = scene.nodesync_branch_index
-        if 0 <= idx < len(scene.nodesync_branch_list):
-            item = scene.nodesync_branch_list[idx]
-            box  = layout.box()
-            row  = box.row(align=True)
-            row.label(text=item.name, icon='BOOKMARKS')
-            row.prop(item, 'color', text='')
 
 
 # ---------------------------------------------------------------------------

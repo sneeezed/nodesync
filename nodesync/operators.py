@@ -41,30 +41,46 @@ def _refresh_history(scene, root):
         from .git_ops import GitRepo
         repo = GitRepo(root)
         entries = repo.log(30)
+        head_full = repo.current_commit_hash(short=False)
+        current_branch = repo.current_branch()
     except Exception:
         entries = []
+        head_full = ''
+        current_branch = ''
+
+    scene.nodesync_head_hash = head_full
+
+    # Walk newest→oldest, propagating the active branch name from decoration tags
+    active_branch = current_branch
 
     scene.nodesync_commit_history.clear()
     for e in entries:
+        # If this commit is a branch tip, update the active branch name
+        decs = e.get('decorations', [])
+        local_decs = [d for d in decs if not d.startswith('origin/')]
+        if local_decs:
+            active_branch = local_decs[0]
+
         item = scene.nodesync_commit_history.add()
         item.full_hash   = e['full_hash']
         item.hash        = e['hash']
         item.subject     = e['subject']
         item.author      = e['author']
         item.date        = e['date']
-        item.decorations = ','.join(e.get('decorations', []))
+        item.decorations = ','.join(decs)
+        idx, color        = _branch_color_for_name(active_branch)
+        item.branch_name  = active_branch
+        item.color_index  = idx
+        item.branch_color = color
 
 
 def _refresh_branches(scene, root):
     """Populate scene.nodesync_branch_list and nodesync_current_branch."""
     from .git_ops import GitRepo
-    from .project import NodeSyncProject
     try:
         repo    = GitRepo(root)
-        proj    = NodeSyncProject(root)
         current = repo.current_branch()
         branches = repo.list_branches()
-        colors   = proj.get_branch_colors()
     except Exception:
         return
 
@@ -73,9 +89,9 @@ def _refresh_branches(scene, root):
     for name in branches:
         item       = scene.nodesync_branch_list.add()
         item.name  = name
-        saved_color = colors.get(name)
-        if saved_color and len(saved_color) == 3:
-            item.color = saved_color
+        idx, color      = _branch_color_for_name(name)
+        item.color       = color
+        item.color_index = idx
 
 
 # ---------------------------------------------------------------------------
@@ -139,8 +155,8 @@ class NODESYNC_OT_init_project(bpy.types.Operator):
         if saved_url:
             scene.nodesync_remote_url = saved_url
 
-        _refresh_history(scene, root)
         _refresh_branches(scene, root)
+        _refresh_history(scene, root)
         return {'FINISHED'}
 
 
@@ -181,8 +197,8 @@ class NODESYNC_OT_open_project(bpy.types.Operator):
         if saved_url:
             context.scene.nodesync_remote_url = saved_url
 
-        _refresh_history(context.scene, root)
         _refresh_branches(context.scene, root)
+        _refresh_history(context.scene, root)
         self.report({'INFO'}, f"Opened: {root}")
         return {'FINISHED'}
 
@@ -226,8 +242,8 @@ class NODESYNC_OT_commit(bpy.types.Operator):
             repo.add(os.path.join(proj.root, '.nodesync'))
             short_hash = repo.commit(msg)
             scene.nodesync_commit_message = ''
-            _refresh_history(scene, proj.root)
             _refresh_branches(scene, proj.root)
+            _refresh_history(scene, proj.root)
             self.report({'INFO'},
                         f"Committed {len(exported)} group(s) [{short_hash}]: {msg[:40]}")
         except GitNotFoundError as e:
@@ -274,8 +290,8 @@ class NODESYNC_OT_refresh_history(bpy.types.Operator):
     def execute(self, context):
         scene = context.scene
         root  = scene.nodesync_project_root.strip()
-        _refresh_history(scene, root)
         _refresh_branches(scene, root)
+        _refresh_history(scene, root)
         self.report({'INFO'}, f"History refreshed: {len(scene.nodesync_commit_history)} commits")
         return {'FINISHED'}
 
@@ -535,8 +551,8 @@ class NODESYNC_OT_clone_from_github(bpy.types.Operator):
         # Import all node groups from the cloned nodes/ directory
         imported = proj.import_all_from_disk()
 
-        _refresh_history(scene, target_dir)
         _refresh_branches(scene, target_dir)
+        _refresh_history(scene, target_dir)
 
         self.report({'INFO'},
                     f"Cloned into '{target_dir}' — imported {len(imported)} group(s)")
@@ -673,8 +689,8 @@ class NODESYNC_OT_pull(bpy.types.Operator):
 
         # Clean pull — reimport node groups
         imported = proj.import_all_from_disk()
-        _refresh_history(scene, proj.root)
         _refresh_branches(scene, proj.root)
+        _refresh_history(scene, proj.root)
         scene.nodesync_sync_status = 'Pulled OK'
         self.report({'INFO'}, f"Pulled OK — reimported {len(imported)} group(s)")
         return {'FINISHED'}
@@ -684,19 +700,61 @@ class NODESYNC_OT_pull(bpy.types.Operator):
 # Create Branch
 # ---------------------------------------------------------------------------
 
+# 20 colors matched to COLORSET_01_VEC … COLORSET_20_VEC (Blender's bone color sets).
+# Index 0 → COLORSET_01_VEC, index 19 → COLORSET_20_VEC.
+_BRANCH_PALETTE = [
+    (0.90, 0.15, 0.15),  # 01 red
+    (0.90, 0.40, 0.10),  # 02 orange-red
+    (0.90, 0.68, 0.10),  # 03 orange
+    (0.68, 0.90, 0.10),  # 04 yellow-green
+    (0.15, 0.85, 0.20),  # 05 green
+    (0.10, 0.85, 0.55),  # 06 teal
+    (0.10, 0.72, 0.90),  # 07 cyan
+    (0.10, 0.42, 0.90),  # 08 blue
+    (0.28, 0.10, 0.90),  # 09 blue-purple
+    (0.60, 0.10, 0.90),  # 10 purple
+    (0.90, 0.10, 0.65),  # 11 magenta
+    (0.90, 0.10, 0.28),  # 12 rose-red
+    (0.95, 0.60, 0.60),  # 13 light red/salmon
+    (0.95, 0.78, 0.55),  # 14 peach
+    (0.95, 0.95, 0.50),  # 15 light yellow
+    (0.55, 0.95, 0.55),  # 16 light green
+    (0.50, 0.95, 0.95),  # 17 light cyan
+    (0.55, 0.60, 0.95),  # 18 light blue
+    (0.82, 0.82, 0.82),  # 19 light grey
+    (0.45, 0.45, 0.45),  # 20 dark grey
+]
+
+
+def _branch_color_for_name(branch_name: str) -> tuple[int, tuple]:
+    """Return a deterministic (palette_index, rgb) based solely on the branch name.
+
+    main/master always get index 7 (blue), matching GitHub's convention.
+    All other branches are hashed to a stable index that avoids blue so
+    they stay visually distinct from the default branch.
+    """
+    if branch_name in ('main', 'master'):
+        return 7, _BRANCH_PALETTE[7]
+    # Simple djb2-style hash — stable across runs
+    h = 5381
+    for ch in branch_name:
+        h = ((h << 5) + h + ord(ch)) & 0xFFFFFFFF
+    # Exclude index 7 (reserved for main/master)
+    available = [i for i in range(len(_BRANCH_PALETTE)) if i != 7]
+    idx = available[h % len(available)]
+    return idx, _BRANCH_PALETTE[idx]
+
+
 class NODESYNC_OT_create_branch(bpy.types.Operator):
     bl_idname      = 'nodesync.create_branch'
     bl_label       = 'Create Branch'
     bl_description = 'Create a new git branch with a display color'
 
     def invoke(self, context, event):
-        return context.window_manager.invoke_props_dialog(self, width=300)
+        return context.window_manager.invoke_props_dialog(self, width=280)
 
     def draw(self, context):
-        layout = self.layout
-        scene  = context.scene
-        layout.prop(scene, 'nodesync_new_branch_name', text='Name')
-        layout.prop(scene, 'nodesync_new_branch_color', text='Color')
+        self.layout.prop(context.scene, 'nodesync_new_branch_name', text='Name')
 
     @classmethod
     def poll(cls, context):
@@ -722,14 +780,11 @@ class NODESYNC_OT_create_branch(bpy.types.Operator):
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
 
-        color = list(scene.nodesync_new_branch_color)
-        proj.set_branch_color(name, color)
-
         # Clear input
         scene.nodesync_new_branch_name = ''
 
-        _refresh_history(scene, proj.root)
         _refresh_branches(scene, proj.root)
+        _refresh_history(scene, proj.root)
         self.report({'INFO'}, f"Created and switched to branch '{name}'")
         return {'FINISHED'}
 
@@ -768,8 +823,8 @@ class NODESYNC_OT_switch_branch(bpy.types.Operator):
             return {'CANCELLED'}
 
         imported = proj.import_all_from_disk()
-        _refresh_history(scene, proj.root)
         _refresh_branches(scene, proj.root)
+        _refresh_history(scene, proj.root)
         self.report({'INFO'},
                     f"Switched to '{self.branch_name}' — reimported {len(imported)} group(s)")
         return {'FINISHED'}
@@ -860,8 +915,8 @@ class NODESYNC_OT_complete_merge(bpy.types.Operator):
         scene.nodesync_conflict_items.clear()
         scene.nodesync_has_conflicts  = False
         scene.nodesync_sync_status    = 'Merge complete'
-        _refresh_history(scene, proj.root)
         _refresh_branches(scene, proj.root)
+        _refresh_history(scene, proj.root)
         self.report({'INFO'},
                     f"Merge complete [{short_hash}] — reimported {len(imported)} group(s)")
         return {'FINISHED'}
@@ -902,8 +957,8 @@ class NODESYNC_OT_abort_merge(bpy.types.Operator):
         scene.nodesync_conflict_items.clear()
         scene.nodesync_has_conflicts  = False
         scene.nodesync_sync_status    = 'Merge aborted'
-        _refresh_history(scene, proj.root)
         _refresh_branches(scene, proj.root)
+        _refresh_history(scene, proj.root)
         self.report({'INFO'}, f"Merge aborted — reverted to pre-merge state ({len(imported)} groups reloaded)")
         return {'FINISHED'}
 
