@@ -101,7 +101,7 @@ def _nodesync_save_post(*args):
 
         from .project import NodeSyncProject
         proj     = NodeSyncProject(root)
-        exported = proj.export_tracked_groups()
+        exported = proj.export_all_groups()
         if exported:
             print(f"[NodeSync] Auto-exported {len(exported)} group(s): "
                   f"{', '.join(exported)}")

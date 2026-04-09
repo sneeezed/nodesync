@@ -363,7 +363,24 @@ class NODE_PT_nodesync_history(bpy.types.Panel):
             layout.label(text='Initialize a project first', icon='ERROR')
             return
 
-        layout.operator('nodesync.refresh_history', icon='FILE_REFRESH')
+        row = layout.row(align=True)
+        row.operator('nodesync.refresh_history', text='', icon='FILE_REFRESH')
+
+        nt = getattr(context.space_data, 'node_tree', None)
+        if nt:
+            if scene.nodesync_history_filter_active:
+                row.operator('nodesync.toggle_history_filter',
+                             text='All commits', icon='X')
+            else:
+                short_name = nt.name[:18] + ('…' if len(nt.name) > 18 else '')
+                row.operator('nodesync.toggle_history_filter',
+                             text=f'{short_name} only', icon='FILTER')
+
+        if scene.nodesync_history_filter_active:
+            layout.label(
+                text=f'Filtered: {scene.nodesync_history_filter_label}',
+                icon='INFO',
+            )
 
         if not scene.nodesync_commit_history:
             layout.label(text='No commits yet', icon='INFO')

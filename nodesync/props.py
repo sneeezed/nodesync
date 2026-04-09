@@ -113,6 +113,15 @@ SCENE_PROPS = {
         name    = 'HEAD Hash',
         default = '',
     ),
+    # History filter
+    'nodesync_history_filter_active': bpy.props.BoolProperty(
+        name    = 'History Filter Active',
+        default = False,
+    ),
+    'nodesync_history_filter_label': bpy.props.StringProperty(
+        name    = 'History Filter Label',
+        default = '',
+    ),
     # Conflicts
     'nodesync_has_conflicts': bpy.props.BoolProperty(
         name        = 'Has Conflicts',

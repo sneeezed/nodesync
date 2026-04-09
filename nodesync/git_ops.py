@@ -139,6 +139,21 @@ class GitRepo:
                 })
         return entries
 
+    def log_for_file(self, filepath: str, n: int = 300) -> set:
+        """Return a set of full commit hashes that touched *filepath*.
+
+        *filepath* is relative to the repo root, e.g. 'nodes/MyGroup.json'.
+        Returns an empty set if there are no commits or the file was never
+        committed.
+        """
+        r = self._run(
+            'log', f'--max-count={n}', '--format=%H', '--', filepath,
+            check=False,
+        )
+        if r.returncode != 0 or not r.stdout.strip():
+            return set()
+        return set(r.stdout.strip().splitlines())
+
     # ------------------------------------------------------------------
     # Branching and checkout
     # ------------------------------------------------------------------

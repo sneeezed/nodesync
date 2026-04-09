@@ -35,12 +35,16 @@ def _get_token(context):
         return ''
 
 
-def _refresh_history(scene, root):
-    """Populate scene.nodesync_commit_history from git log."""
+def _refresh_history(scene, root, filter_hashes=None):
+    """Populate scene.nodesync_commit_history from git log.
+
+    If *filter_hashes* is a set of full commit hashes, only those commits
+    are added to the list (used for per-node-group filtering).
+    """
     try:
         from .git_ops import GitRepo
         repo = GitRepo(root)
-        entries = repo.log(30)
+        entries = repo.log(300)
         head_full = repo.current_commit_hash(short=False)
         current_branch = repo.current_branch()
     except Exception:
@@ -60,6 +64,9 @@ def _refresh_history(scene, root):
         local_decs = [d for d in decs if not d.startswith('origin/')]
         if local_decs:
             active_branch = local_decs[0]
+
+        if filter_hashes is not None and e['full_hash'] not in filter_hashes:
+            continue
 
         item = scene.nodesync_commit_history.add()
         item.full_hash   = e['full_hash']
@@ -311,6 +318,9 @@ class NODESYNC_OT_refresh_history(bpy.types.Operator):
     def execute(self, context):
         scene = context.scene
         root  = scene.nodesync_project_root.strip()
+        # Pressing refresh always clears any active filter
+        scene.nodesync_history_filter_active = False
+        scene.nodesync_history_filter_label  = ''
         _refresh_branches(scene, root)
         _refresh_history(scene, root)
         self.report({'INFO'}, f"History refreshed: {len(scene.nodesync_commit_history)} commits")
@@ -359,9 +369,10 @@ class NODESYNC_OT_checkout_commit(bpy.types.Operator):
         # Reimport all JSON files from the restored version
         imported = proj.import_all_from_disk()
         _refresh_history(scene, proj.root)
+        names = ', '.join(imported) if imported else 'none'
         self.report({'INFO'},
                     f"Restored nodes from {self.commit_hash[:8]} — "
-                    f"reimported {len(imported)} group(s). "
+                    f"{len(imported)} group(s): {names}. "
                     f"Commit to save this state.")
         return {'FINISHED'}
 
@@ -713,7 +724,8 @@ class NODESYNC_OT_pull(bpy.types.Operator):
         _refresh_branches(scene, proj.root)
         _refresh_history(scene, proj.root)
         scene.nodesync_sync_status = 'Pulled OK'
-        self.report({'INFO'}, f"Pulled OK — reimported {len(imported)} group(s)")
+        names = ', '.join(imported) if imported else 'none'
+        self.report({'INFO'}, f"Pulled OK — {len(imported)} group(s): {names}")
         return {'FINISHED'}
 
 
@@ -985,6 +997,57 @@ class NODESYNC_OT_abort_merge(bpy.types.Operator):
 
 
 # ---------------------------------------------------------------------------
+# Toggle History Filter
+# ---------------------------------------------------------------------------
+
+class NODESYNC_OT_toggle_history_filter(bpy.types.Operator):
+    bl_idname      = 'nodesync.toggle_history_filter'
+    bl_label       = 'Toggle History Filter'
+    bl_description = ('Show only commits that touched the currently viewed '
+                      'node group, or clear the filter to show all commits')
+
+    @classmethod
+    def poll(cls, context):
+        return bool(context.scene.nodesync_project_root.strip())
+
+    def execute(self, context):
+        scene = context.scene
+        root  = scene.nodesync_project_root.strip()
+
+        if scene.nodesync_history_filter_active:
+            # Clear filter — show all commits
+            scene.nodesync_history_filter_active = False
+            scene.nodesync_history_filter_label  = ''
+            _refresh_history(scene, root)
+            return {'FINISHED'}
+
+        # Activate filter for the currently viewed node tree
+        sdata = context.space_data
+        nt = getattr(sdata, 'node_tree', None) if sdata else None
+        if not nt:
+            self.report({'WARNING'}, "No active node tree in the editor")
+            return {'CANCELLED'}
+
+        safe     = nt.name.replace('/', '_').replace('\\', '_')
+        filepath = f'nodes/{safe}.json'
+
+        try:
+            from .git_ops import GitRepo
+            repo   = GitRepo(root)
+            hashes = repo.log_for_file(filepath)
+        except Exception as e:
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+
+        scene.nodesync_history_filter_active = True
+        scene.nodesync_history_filter_label  = nt.name
+        _refresh_history(scene, root, filter_hashes=hashes)
+        count = len(scene.nodesync_commit_history)
+        self.report({'INFO'}, f"Filtered to {count} commit(s) for '{nt.name}'")
+        return {'FINISHED'}
+
+
+# ---------------------------------------------------------------------------
 # Registration list
 # ---------------------------------------------------------------------------
 
@@ -1006,4 +1069,5 @@ classes = [
     NODESYNC_OT_resolve_conflict,
     NODESYNC_OT_complete_merge,
     NODESYNC_OT_abort_merge,
+    NODESYNC_OT_toggle_history_filter,
 ]

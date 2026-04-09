@@ -99,13 +99,24 @@ class NodeSyncProject:
     # ------------------------------------------------------------------
 
     def export_group(self, node_group) -> str:
-        """Export one node group to JSON. Returns the file path written."""
+        """Export one node group to JSON. Returns the file path written.
+
+        Skips the write if the serialized content is identical to what is
+        already on disk so that git only sees files that actually changed.
+        """
         from .serializer import export_node_group
         self.ensure_nodes_dir()
-        data      = export_node_group(node_group)
-        out_path  = self.node_file_path(node_group.name)
+        data        = export_node_group(node_group)
+        out_path    = self.node_file_path(node_group.name)
+        new_content = json.dumps(data, indent=2)
+
+        if os.path.isfile(out_path):
+            with open(out_path, 'r', encoding='utf-8') as f:
+                if f.read() == new_content:
+                    return out_path   # unchanged — skip write
+
         with open(out_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
+            f.write(new_content)
         return out_path
 
     def export_all_groups(self) -> list:
