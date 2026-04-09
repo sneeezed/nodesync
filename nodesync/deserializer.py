@@ -10,16 +10,77 @@ import bpy
 from .utils import deserialize_default_value, NO_DEFAULT_VALUE_SOCKETS
 
 
+def _apply_interface_item_props(item, d: dict):
+    """Write stored values onto an existing interface socket item."""
+    dv = d.get('default_value')
+    if dv is not None and hasattr(item, 'default_value'):
+        try:
+            item.default_value = deserialize_default_value(d['socket_type'], dv)
+        except Exception:
+            pass
+    min_v = d.get('min_value')
+    if min_v is not None and hasattr(item, 'min_value'):
+        try:
+            item.min_value = min_v
+        except Exception:
+            pass
+    max_v = d.get('max_value')
+    if max_v is not None and hasattr(item, 'max_value'):
+        try:
+            item.max_value = max_v
+        except Exception:
+            pass
+    ad = d.get('attribute_domain')
+    if ad is not None and hasattr(item, 'attribute_domain'):
+        try:
+            item.attribute_domain = ad
+        except Exception:
+            pass
+
+
 def _restore_interface(node_group, interface_data: list):
     """
     Rebuild the group's exposed interface sockets (Blender 4.x API).
     Falls back to legacy API for 3.x.
+
+    When the interface structure is unchanged (same count, socket types, and
+    directions in the same order), existing items are updated in-place so that
+    their Blender-assigned identifiers (Socket_N) are preserved.  This prevents
+    spurious identifier drift in git history when only node internals change.
+
+    When the structure has genuinely changed the items are cleared and
+    recreated, which is expected and correctly reflected in the commit diff.
     """
     if not interface_data:
         return
 
     # Blender 4.x
     if hasattr(node_group, 'interface') and hasattr(node_group.interface, 'new_socket'):
+        existing = [
+            item for item in node_group.interface.items_tree
+            if item.item_type == 'SOCKET'
+        ]
+
+        # If structure is identical (same count + socket_type + in_out at each
+        # position) update properties in-place to keep the original identifiers.
+        if len(existing) == len(interface_data) and all(
+            e.socket_type == d['socket_type'] and e.in_out == d['in_out']
+            for e, d in zip(existing, interface_data)
+        ):
+            for item, d in zip(existing, interface_data):
+                try:
+                    item.name = d['name']
+                except Exception:
+                    pass
+                _apply_interface_item_props(item, d)
+            return
+
+        # Structure changed — clear and recreate.
+        for item in list(node_group.interface.items_tree):
+            try:
+                node_group.interface.remove(item)
+            except Exception:
+                pass
         for item_data in interface_data:
             try:
                 socket = node_group.interface.new_socket(
@@ -31,37 +92,14 @@ def _restore_interface(node_group, interface_data: list):
                 print(f"[NodeSync] Could not create interface socket "
                       f"'{item_data['name']}': {e}")
                 continue
-
-            dv = item_data.get('default_value')
-            if dv is not None and hasattr(socket, 'default_value'):
-                try:
-                    socket.default_value = deserialize_default_value(
-                        item_data['socket_type'], dv)
-                except Exception:
-                    pass
-
-            min_v = item_data.get('min_value')
-            max_v = item_data.get('max_value')
-            if min_v is not None and hasattr(socket, 'min_value'):
-                try:
-                    socket.min_value = min_v
-                except Exception:
-                    pass
-            if max_v is not None and hasattr(socket, 'max_value'):
-                try:
-                    socket.max_value = max_v
-                except Exception:
-                    pass
-
-            ad = item_data.get('attribute_domain')
-            if ad is not None and hasattr(socket, 'attribute_domain'):
-                try:
-                    socket.attribute_domain = ad
-                except Exception:
-                    pass
+            _apply_interface_item_props(socket, item_data)
         return
 
     # Blender 3.x fallback (deprecated but kept for compatibility)
+    while getattr(node_group, 'inputs', None):
+        node_group.inputs.remove(node_group.inputs[0])
+    while getattr(node_group, 'outputs', None):
+        node_group.outputs.remove(node_group.outputs[0])
     for item_data in interface_data:
         in_out = item_data.get('in_out', 'INPUT')
         try:
@@ -69,14 +107,7 @@ def _restore_interface(node_group, interface_data: list):
                 sock = node_group.inputs.new(item_data['socket_type'], item_data['name'])
             else:
                 sock = node_group.outputs.new(item_data['socket_type'], item_data['name'])
-
-            dv = item_data.get('default_value')
-            if dv is not None and hasattr(sock, 'default_value'):
-                try:
-                    sock.default_value = deserialize_default_value(
-                        item_data['socket_type'], dv)
-                except Exception:
-                    pass
+            _apply_interface_item_props(sock, item_data)
         except Exception as e:
             print(f"[NodeSync] 3.x interface socket creation failed: {e}")
 
@@ -174,21 +205,10 @@ def reconstruct_node_group(data: dict):
     if name in bpy.data.node_groups:
         ng = bpy.data.node_groups[name]
         ng.nodes.clear()  # also clears all links automatically
-
-        # Clear interface (Blender 4.x)
-        if hasattr(ng, 'interface') and hasattr(ng.interface, 'items_tree'):
-            items = list(ng.interface.items_tree)
-            for item in items:
-                try:
-                    ng.interface.remove(item)
-                except Exception:
-                    pass
-        # Blender 3.x fallback
-        elif hasattr(ng, 'inputs'):
-            while ng.inputs:
-                ng.inputs.remove(ng.inputs[0])
-            while ng.outputs:
-                ng.outputs.remove(ng.outputs[0])
+        # Interface clearing is handled inside _restore_interface, which will
+        # update items in-place when the structure is unchanged (preserving
+        # Blender-assigned Socket_N identifiers) and only clear+recreate when
+        # sockets are genuinely added/removed/reordered/retyped.
     else:
         ng = bpy.data.node_groups.new(name, tree_type)
 
