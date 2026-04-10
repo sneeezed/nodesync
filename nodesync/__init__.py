@@ -68,6 +68,11 @@ class NodeSyncPreferences(bpy.types.AddonPreferences):
 if 'props' in dir():
     import importlib
     from . import utils, serializer, deserializer, project, git_ops, props, operators, panels, diff
+    from .git_ops import (
+        exceptions as git_exceptions, base as git_base, state as git_state,
+        history as git_history, checkout as git_checkout, diff as git_diff_mod,
+        remote as git_remote, branches as git_branches, conflicts as git_conflicts,
+    )
     from .operators import (
         modifier_links, helpers,
         project_ops, commit_ops, diff_ops, remote_ops, branch_ops, conflict_ops,
@@ -76,6 +81,16 @@ if 'props' in dir():
     importlib.reload(serializer)
     importlib.reload(deserializer)
     importlib.reload(project)
+    # Reload git_ops sub-modules in dependency order before the package init
+    importlib.reload(git_exceptions)
+    importlib.reload(git_base)
+    importlib.reload(git_state)
+    importlib.reload(git_history)
+    importlib.reload(git_checkout)
+    importlib.reload(git_diff_mod)
+    importlib.reload(git_remote)
+    importlib.reload(git_branches)
+    importlib.reload(git_conflicts)
     importlib.reload(git_ops)
     importlib.reload(diff)
     importlib.reload(props)
