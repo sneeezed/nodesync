@@ -68,6 +68,10 @@ class NodeSyncPreferences(bpy.types.AddonPreferences):
 if 'props' in dir():
     import importlib
     from . import utils, serializer, deserializer, project, git_ops, props, operators, panels, diff
+    from .operators import (
+        modifier_links, helpers,
+        project_ops, commit_ops, diff_ops, remote_ops, branch_ops, conflict_ops,
+    )
     importlib.reload(utils)
     importlib.reload(serializer)
     importlib.reload(deserializer)
@@ -75,6 +79,15 @@ if 'props' in dir():
     importlib.reload(git_ops)
     importlib.reload(diff)
     importlib.reload(props)
+    # Reload operator sub-modules in dependency order before the package init
+    importlib.reload(modifier_links)
+    importlib.reload(helpers)
+    importlib.reload(project_ops)
+    importlib.reload(commit_ops)
+    importlib.reload(diff_ops)
+    importlib.reload(remote_ops)
+    importlib.reload(branch_ops)
+    importlib.reload(conflict_ops)
     importlib.reload(operators)
     importlib.reload(panels)
 else:
