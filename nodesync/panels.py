@@ -45,10 +45,13 @@ class NODESYNC_UL_history(bpy.types.UIList):
         if self.layout_type in {'DEFAULT', 'COMPACT'}:
             row = layout.row(align=True)
 
-            # Bookmark icon on the HEAD commit (where the next commit will land)
-            head_hash = getattr(context.scene, 'nodesync_head_hash', '')
-            is_head = bool(item.full_hash and item.full_hash == head_hash)
-            row.label(text='', icon='BOOKMARKS' if is_head else 'BLANK1')
+            # Bookmark icon: shows on the currently-loaded commit (either a
+            # revert target or HEAD if no revert is active)
+            head_hash    = getattr(context.scene, 'nodesync_head_hash', '')
+            restore_hash = getattr(context.scene, 'nodesync_restore_hash', '')
+            active_hash  = restore_hash if restore_hash else head_hash
+            is_active = bool(item.full_hash and item.full_hash == active_hash)
+            row.label(text='', icon='BOOKMARKS' if is_active else 'BLANK1')
 
             # Branch color swatch — disabled so it shows color without opening the picker
             sub = row.row(align=True)

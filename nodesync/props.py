@@ -113,6 +113,12 @@ SCENE_PROPS = {
         name    = 'HEAD Hash',
         default = '',
     ),
+    # Restore tracking (full hash of the commit currently loaded via revert;
+    # empty means the working state matches HEAD)
+    'nodesync_restore_hash': bpy.props.StringProperty(
+        name    = 'Restore Hash',
+        default = '',
+    ),
     # History filter
     'nodesync_history_filter_active': bpy.props.BoolProperty(
         name    = 'History Filter Active',

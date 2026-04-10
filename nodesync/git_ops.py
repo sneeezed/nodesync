@@ -273,6 +273,104 @@ class GitRepo:
         msg = r.stderr.strip() or r.stdout.strip() or 'pull failed'
         raise GitError(msg)
 
+    def diff_since(self, pre_hash: str) -> dict:
+        """
+        Return nodes/ files changed between pre_hash and HEAD, categorized by
+        git status.  Returns {'modified': [...], 'added': [...], 'deleted': [...]}
+        with paths relative to the repo root (e.g. 'nodes/Foo.json').
+        Handles fast-forward, merge commits, and multi-commit pulls correctly
+        because it diffs two tree states rather than a single step.
+        """
+        if not pre_hash:
+            return {'modified': [], 'added': [], 'deleted': []}
+        r = self._run(
+            'diff', '--name-status', f'{pre_hash}..HEAD', '--', 'nodes/',
+            check=False,
+        )
+        result = {'modified': [], 'added': [], 'deleted': []}
+        if r.returncode != 0 or not r.stdout.strip():
+            return result
+        for line in r.stdout.strip().splitlines():
+            if not line:
+                continue
+            parts = line.split('\t', 1)
+            if len(parts) < 2:
+                continue
+            status, path = parts[0].strip(), parts[1].strip()
+            if status == 'M':
+                result['modified'].append(path)
+            elif status == 'A':
+                result['added'].append(path)
+            elif status == 'D':
+                result['deleted'].append(path)
+        return result
+
+    def diff_worktree_vs_commit(self, commit_hash: str) -> dict:
+        """
+        Diff the current working tree (actual files on disk) against
+        commit_hash, scoped to nodes/.  This is correct even when HEAD hasn't
+        moved (e.g. after a restore_files_from that wasn't committed).
+
+        Returns {'modified': [...], 'added': [...], 'deleted': [...]} where:
+          'added'   — file exists on disk but NOT in commit (will vanish after restore)
+          'deleted' — file exists in commit but NOT on disk  (will appear after restore)
+          'modified'— file exists in both but differs
+        """
+        if not commit_hash:
+            return {'modified': [], 'added': [], 'deleted': []}
+        r = self._run(
+            'diff', '--name-status', commit_hash, '--', 'nodes/',
+            check=False,
+        )
+        result = {'modified': [], 'added': [], 'deleted': []}
+        if r.returncode != 0 or not r.stdout.strip():
+            return result
+        for line in r.stdout.strip().splitlines():
+            if not line:
+                continue
+            parts = line.split('\t', 1)
+            if len(parts) < 2:
+                continue
+            status, path = parts[0].strip(), parts[1].strip()
+            if status == 'M':
+                result['modified'].append(path)
+            elif status == 'A':
+                result['added'].append(path)
+            elif status == 'D':
+                result['deleted'].append(path)
+        return result
+
+    def diff_between(self, from_hash: str, to_hash: str) -> dict:
+        """
+        Like diff_since but diffs from_hash..to_hash instead of pre_hash..HEAD.
+        Useful when HEAD hasn't moved (e.g. restore_files_from) but you still
+        need to know what changed between two specific commits.
+        Returns {'modified': [...], 'added': [...], 'deleted': [...]}.
+        """
+        if not from_hash or not to_hash:
+            return {'modified': [], 'added': [], 'deleted': []}
+        r = self._run(
+            'diff', '--name-status', f'{from_hash}..{to_hash}', '--', 'nodes/',
+            check=False,
+        )
+        result = {'modified': [], 'added': [], 'deleted': []}
+        if r.returncode != 0 or not r.stdout.strip():
+            return result
+        for line in r.stdout.strip().splitlines():
+            if not line:
+                continue
+            parts = line.split('\t', 1)
+            if len(parts) < 2:
+                continue
+            status, path = parts[0].strip(), parts[1].strip()
+            if status == 'M':
+                result['modified'].append(path)
+            elif status == 'A':
+                result['added'].append(path)
+            elif status == 'D':
+                result['deleted'].append(path)
+        return result
+
     def fetch(self, token: str = '') -> str:
         """Fetch from origin without merging. Returns stdout."""
         remote_url = self.get_remote_url()

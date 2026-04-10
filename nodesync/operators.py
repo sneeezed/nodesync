@@ -8,6 +8,53 @@ import json
 
 
 # ---------------------------------------------------------------------------
+# Modifier link snapshot — persists across operator calls within a session
+# ---------------------------------------------------------------------------
+
+# Maps group_name → [(object_name, modifier_name), ...]
+# Captures which GN modifiers were pointing to which groups so that if a group
+# is deleted and later re-imported, the modifiers can be automatically re-linked.
+_modifier_link_snapshot: dict = {}
+
+
+def _snapshot_modifier_links() -> None:
+    """Add current modifier→group links to the snapshot (additive, never clears)."""
+    for obj in bpy.data.objects:
+        for mod in obj.modifiers:
+            if mod.type == 'NODES' and mod.node_group is not None:
+                key   = mod.node_group.name
+                entry = (obj.name, mod.name)
+                if key not in _modifier_link_snapshot:
+                    _modifier_link_snapshot[key] = []
+                if entry not in _modifier_link_snapshot[key]:
+                    _modifier_link_snapshot[key].append(entry)
+
+
+def _restore_modifier_links(imported_names: list) -> int:
+    """Re-link GN modifiers whose node_group became None after a group was
+    removed and then re-imported.  Returns count of modifiers re-linked."""
+    relinked = 0
+    for group_name in imported_names:
+        entries = _modifier_link_snapshot.get(group_name)
+        if not entries:
+            continue
+        ng = bpy.data.node_groups.get(group_name)
+        if ng is None:
+            continue
+        for obj_name, mod_name in entries:
+            obj = bpy.data.objects.get(obj_name)
+            if obj is None:
+                continue
+            mod = obj.modifiers.get(mod_name)
+            if mod is None or mod.type != 'NODES':
+                continue
+            if mod.node_group is None:
+                mod.node_group = ng
+                relinked += 1
+    return relinked
+
+
+# ---------------------------------------------------------------------------
 # Helpers shared by multiple operators
 # ---------------------------------------------------------------------------
 
@@ -250,6 +297,7 @@ class NODESYNC_OT_commit(bpy.types.Operator):
             short_hash = repo.commit(msg)
             full_hash  = repo.current_commit_hash(short=False)
             scene.nodesync_commit_message = ''
+            scene.nodesync_restore_hash   = ''  # back to HEAD, clear revert marker
             _refresh_branches(scene, proj.root)
             _refresh_history(scene, proj.root)
             self.report({'INFO'},
@@ -352,12 +400,18 @@ class NODESYNC_OT_checkout_commit(bpy.types.Operator):
             self.report({'ERROR'}, "No active NodeSync project")
             return {'CANCELLED'}
 
+        # Snapshot before anything changes so modifiers can be re-linked after
+        _snapshot_modifier_links()
+
         from .git_ops import GitRepo, GitNotFoundError, GitError
         try:
             repo = GitRepo(proj.root)
-            # Restore only the nodes/ files from the target commit without
-            # moving HEAD. This keeps the repo on the current branch so that
-            # all newer commits remain visible in the history.
+            # Diff worktree vs target BEFORE restoring to find groups that will
+            # disappear from disk (exist on disk now but not in the target commit).
+            # We do NOT use this diff to limit which groups get imported — we
+            # always do a full import so that Blender state is guaranteed to match
+            # the target regardless of what the user changed in-memory.
+            diff = repo.diff_worktree_vs_commit(self.commit_hash)
             repo.restore_files_from(self.commit_hash, 'nodes/')
         except GitNotFoundError as e:
             self.report({'ERROR'}, str(e))
@@ -366,14 +420,45 @@ class NODESYNC_OT_checkout_commit(bpy.types.Operator):
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
 
-        # Reimport all JSON files from the restored version
+        # Files that exist on disk but not in the target commit are NOT removed
+        # by git checkout — delete them explicitly so import_all_from_disk only
+        # sees the files that belong to the target commit.
+        for rel_path in diff['added']:
+            abs_path = os.path.join(proj.root, rel_path)
+            try:
+                if os.path.isfile(abs_path):
+                    os.remove(abs_path)
+            except OSError as e:
+                print(f"[NodeSync] Could not remove '{rel_path}': {e}")
+
+        # Always reconstruct every group from the restored files so that
+        # in-Blender edits (deletions, manual changes) are fully overwritten.
         imported = proj.import_all_from_disk()
+        _restore_modifier_links(imported)
+
+        # Track which commit is currently loaded so the bookmark stays accurate.
+        scene.nodesync_restore_hash = self.commit_hash
+
         _refresh_history(scene, proj.root)
-        names = ', '.join(imported) if imported else 'none'
-        self.report({'INFO'},
-                    f"Restored nodes from {self.commit_hash[:8]} — "
-                    f"{len(imported)} group(s): {names}. "
-                    f"Commit to save this state.")
+
+        # Ask the user whether to also remove the corresponding Blender groups
+        # (the JSON files are already gone from disk at this point).
+        to_delete_names = [
+            os.path.basename(p)[:-5] if p.endswith('.json') else os.path.basename(p)
+            for p in diff['added']
+        ]
+
+        if not to_delete_names:
+            self.report({'INFO'},
+                        f"Restored nodes from {self.commit_hash[:8]} — "
+                        f"{len(imported)} group(s) loaded. Commit to save this state.")
+            return {'FINISHED'}
+
+        _pending_pull_changes['creates'] = []
+        _pending_pull_changes['deletes'] = to_delete_names
+        _pending_pull_changes['project_root'] = proj.root
+
+        bpy.ops.nodesync.confirm_pull_changes('INVOKE_DEFAULT')
         return {'FINISHED'}
 
 
@@ -669,6 +754,81 @@ class NODESYNC_OT_push(bpy.types.Operator):
 
 
 # ---------------------------------------------------------------------------
+# Pull — confirmation dialog
+# ---------------------------------------------------------------------------
+
+# Module-level storage for the pull confirmation dialog.
+# Populated by NODESYNC_OT_pull before invoking the dialog operator.
+_pending_pull_changes = {
+    'creates': [],   # list of (group_name, repo_relative_path)
+    'deletes': [],   # list of group_name strings
+    'project_root': '',
+}
+
+
+class NODESYNC_OT_confirm_pull_changes(bpy.types.Operator):
+    bl_idname  = 'nodesync.confirm_pull_changes'
+    bl_label   = 'Apply Pull Changes'
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=360)
+
+    def draw(self, context):
+        layout = self.layout
+        data = _pending_pull_changes
+
+        if data['creates']:
+            layout.label(text="New node groups incoming from pull:", icon='ADD')
+            col = layout.column(align=True)
+            for name, _ in data['creates']:
+                col.label(text=f"    {name}")
+            layout.separator(factor=0.5)
+
+        if data['deletes']:
+            layout.label(text="Node groups removed in pull:", icon='TRASH')
+            col = layout.column(align=True)
+            for name in data['deletes']:
+                col.label(text=f"    {name}")
+            layout.separator(factor=0.5)
+
+        layout.label(text="Click OK to apply, or Cancel to skip.")
+
+    def execute(self, context):
+        data = _pending_pull_changes
+        proj_root = data['project_root']
+
+        if data['creates'] and proj_root:
+            from .project import NodeSyncProject
+            proj = NodeSyncProject(proj_root)
+            paths = [p for _, p in data['creates']]
+            imported = proj.import_specific_from_disk(paths)
+            _restore_modifier_links(imported)
+            if imported:
+                self.report({'INFO'}, f"Imported: {', '.join(imported)}")
+
+        if data['deletes']:
+            # Snapshot before deletion so we can re-link if these groups return
+            _snapshot_modifier_links()
+            removed = []
+            for name in data['deletes']:
+                ng = bpy.data.node_groups.get(name)
+                if ng:
+                    bpy.data.node_groups.remove(ng)
+                    removed.append(name)
+            if removed:
+                self.report({'INFO'}, f"Removed: {', '.join(removed)}")
+
+        data['creates'].clear()
+        data['deletes'].clear()
+        data['project_root'] = ''
+        return {'FINISHED'}
+
+    def cancel(self, context):
+        _pending_pull_changes['creates'].clear()
+        _pending_pull_changes['deletes'].clear()
+        _pending_pull_changes['project_root'] = ''
+
+
 # Pull
 # ---------------------------------------------------------------------------
 
@@ -693,9 +853,13 @@ class NODESYNC_OT_pull(bpy.types.Operator):
 
         token = _get_token(context)
 
+        # Snapshot before anything changes so we can re-link modifiers later
+        _snapshot_modifier_links()
+
         from .git_ops import GitRepo, GitError
         try:
             repo = GitRepo(proj.root)
+            pre_hash = repo.current_commit_hash(short=False)
             has_conflicts, conflicted_files = repo.pull(token=token)
         except GitError as e:
             scene.nodesync_sync_status = 'Pull failed'
@@ -719,13 +883,47 @@ class NODESYNC_OT_pull(bpy.types.Operator):
                         "Use the Conflicts panel to resolve them.")
             return {'FINISHED'}
 
-        # Clean pull — reimport node groups
-        imported = proj.import_all_from_disk()
+        # Clean pull — selectively reimport only what changed
+        if not pre_hash:
+            # No prior commit (shouldn't happen, but fall back to full import)
+            imported = proj.import_all_from_disk()
+            _refresh_branches(scene, proj.root)
+            _refresh_history(scene, proj.root)
+            scene.nodesync_sync_status = 'Pulled OK'
+            self.report({'INFO'}, f"Pulled OK — {len(imported)} group(s) imported")
+            return {'FINISHED'}
+
+        diff = repo.diff_since(pre_hash)
+        modified = diff['modified']
+        added    = diff['added']
+        deleted  = diff['deleted']
+
+        # Reconstruct groups whose files were modified
+        reimported = proj.import_specific_from_disk(modified) if modified else []
+        _restore_modifier_links(reimported)
+
         _refresh_branches(scene, proj.root)
         _refresh_history(scene, proj.root)
-        scene.nodesync_sync_status = 'Pulled OK'
-        names = ', '.join(imported) if imported else 'none'
-        self.report({'INFO'}, f"Pulled OK — {len(imported)} group(s): {names}")
+
+        # If nothing needs confirmation just report and finish
+        if not added and not deleted:
+            count = len(reimported)
+            scene.nodesync_sync_status = 'Pulled OK'
+            self.report({'INFO'},
+                        f"Pulled OK — {count} group(s) updated" if count
+                        else "Pulled OK — already up to date")
+            return {'FINISHED'}
+
+        # Populate the confirmation dialog and invoke it
+        _pending_pull_changes['creates'] = proj.load_group_data_from_disk(added)
+        _pending_pull_changes['deletes'] = [
+            os.path.basename(p)[:-5] if p.endswith('.json') else os.path.basename(p)
+            for p in deleted
+        ]
+        _pending_pull_changes['project_root'] = proj.root
+
+        scene.nodesync_sync_status = 'Pulled OK — review changes below'
+        bpy.ops.nodesync.confirm_pull_changes('INVOKE_DEFAULT')
         return {'FINISHED'}
 
 
@@ -1063,6 +1261,7 @@ classes = [
     NODESYNC_OT_exit_diff,
     NODESYNC_OT_set_remote,
     NODESYNC_OT_push,
+    NODESYNC_OT_confirm_pull_changes,
     NODESYNC_OT_pull,
     NODESYNC_OT_create_branch,
     NODESYNC_OT_switch_branch,

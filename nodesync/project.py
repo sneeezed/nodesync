@@ -162,6 +162,47 @@ class NodeSyncProject:
                 print(f"[NodeSync] Failed to import '{filename}': {e}")
         return imported
 
+    def import_specific_from_disk(self, repo_relative_paths: list) -> list:
+        """
+        Reconstruct only the node groups whose JSON files are listed in
+        repo_relative_paths (e.g. ['nodes/Foo.json', 'nodes/Bar.json']).
+        Returns list of successfully imported group names.
+        """
+        from .deserializer import reconstruct_node_group
+        imported = []
+        for rel_path in repo_relative_paths:
+            abs_path = os.path.join(self.root, rel_path)
+            if not os.path.isfile(abs_path):
+                continue
+            try:
+                with open(abs_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                ng = reconstruct_node_group(data)
+                if ng:
+                    imported.append(ng.name)
+            except Exception as e:
+                print(f"[NodeSync] Failed to import '{rel_path}': {e}")
+        return imported
+
+    def load_group_data_from_disk(self, repo_relative_paths: list) -> list:
+        """
+        Read JSON files and return their parsed dicts without importing into
+        Blender.  Used to preview group names before showing a confirmation
+        dialog.  Silently skips unreadable files.
+        """
+        result = []
+        for rel_path in repo_relative_paths:
+            abs_path = os.path.join(self.root, rel_path)
+            if not os.path.isfile(abs_path):
+                continue
+            try:
+                with open(abs_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                result.append((data.get('name', rel_path), rel_path))
+            except Exception:
+                pass
+        return result
+
     # ------------------------------------------------------------------
     # Class method helpers
     # ------------------------------------------------------------------
