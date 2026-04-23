@@ -127,7 +127,7 @@ class NODE_PT_nodesync(bpy.types.Panel):
         sdata = context.space_data
         return (sdata is not None
                 and sdata.type == 'NODE_EDITOR'
-                and getattr(sdata, 'tree_type', '') == 'GeometryNodeTree')
+                and getattr(sdata, 'tree_type', '') in ('GeometryNodeTree', 'ShaderNodeTree'))
 
     def draw(self, context):
         pass  # sub-panels carry all content

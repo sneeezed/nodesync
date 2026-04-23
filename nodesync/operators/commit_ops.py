@@ -11,6 +11,7 @@ from .helpers import (
     _refresh_branches,
     _refresh_history,
     _pending_pull_changes,
+    _resolve_tree_rel_path,
 )
 from .modifier_links import _snapshot_modifier_links, _restore_modifier_links
 
@@ -36,16 +37,32 @@ class NODESYNC_OT_commit(bpy.types.Operator):
             self.report({'ERROR'}, "No active NodeSync project")
             return {'CANCELLED'}
 
-        # Export all geometry node groups
+        # Export all tracked node groups (Geometry + Shader)
         exported = proj.export_all_groups()
         if not exported:
-            self.report({'WARNING'}, "No Geometry Node groups found in file")
+            self.report({'WARNING'}, "No tracked node groups found in file")
             return {'CANCELLED'}
+
+        # Optionally collect referenced shader textures into textures/
+        try:
+            prefs = context.preferences.addons[__package__.split('.')[0]].preferences
+            track_textures = prefs.track_textures
+        except Exception:
+            track_textures = False
+
+        textures_written = 0
+        if track_textures:
+            try:
+                textures_written = len(proj.collect_shader_textures())
+            except Exception as e:
+                self.report({'WARNING'}, f"Texture collection failed: {e}")
 
         from ..git_ops import GitRepo, GitNotFoundError, GitError
         try:
             repo = GitRepo(proj.root)
             repo.add('nodes/')
+            if track_textures and textures_written:
+                repo.add('textures/')
             # Also commit .nodesync config
             repo.add(os.path.join(proj.root, '.nodesync'))
             short_hash = repo.commit(msg)
@@ -236,8 +253,10 @@ class NODESYNC_OT_toggle_history_filter(bpy.types.Operator):
             self.report({'WARNING'}, "No active node tree in the editor")
             return {'CANCELLED'}
 
-        safe     = nt.name.replace('/', '_').replace('\\', '_')
-        filepath = f'nodes/{safe}.json'
+        filepath, display_name = _resolve_tree_rel_path(nt)
+        if not filepath:
+            self.report({'WARNING'}, "Active node tree is not tracked by NodeSync")
+            return {'CANCELLED'}
 
         try:
             from ..git_ops import GitRepo
@@ -248,10 +267,10 @@ class NODESYNC_OT_toggle_history_filter(bpy.types.Operator):
             return {'CANCELLED'}
 
         scene.nodesync_history_filter_active = True
-        scene.nodesync_history_filter_label  = nt.name
+        scene.nodesync_history_filter_label  = display_name
         _refresh_history(scene, root, filter_hashes=hashes)
         count = len(scene.nodesync_commit_history)
-        self.report({'INFO'}, f"Filtered to {count} commit(s) for '{nt.name}'")
+        self.report({'INFO'}, f"Filtered to {count} commit(s) for '{display_name}'")
         return {'FINISHED'}
 
 

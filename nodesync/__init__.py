@@ -5,10 +5,10 @@ NodeSync — Git-backed version control for Blender Geometry Node trees.
 bl_info = {
     'name':        'NodeSync',
     'author':      'NodeSync',
-    'version':     (0, 2, 0),
+    'version':     (1, 0, 0),
     'blender':     (4, 0, 0),
-    'location':    'Geometry Node Editor > N-Panel > NodeSync',
-    'description': 'Git-backed version control for Geometry Node trees',
+    'location':    'Geometry / Shader Node Editor > N-Panel > NodeSync',
+    'description': 'Git-backed version control for Geometry and Shader Node trees',
     'category':    'Node',
 }
 
@@ -49,6 +49,14 @@ class NodeSyncPreferences(bpy.types.AddonPreferences):
         default     = False,
     )
 
+    track_textures: bpy.props.BoolProperty(
+        name        = 'Track Shader Textures',
+        description = ('On commit, copy every image used by a Shader Image '
+                       'Texture node into the project textures/ folder and '
+                       'commit it to Git'),
+        default     = False,
+    )
+
     def draw(self, context):
         layout = self.layout
         layout.label(text='GitHub Authentication', icon='URL')
@@ -60,6 +68,7 @@ class NodeSyncPreferences(bpy.types.AddonPreferences):
         layout.label(text='Commit Behaviour', icon='FILE_TICK')
         layout.prop(self, 'auto_push_on_commit')
         layout.prop(self, 'screenshot_on_commit')
+        layout.prop(self, 'track_textures')
 
 # ---------------------------------------------------------------------------
 # Module reload support (for addon development)

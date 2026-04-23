@@ -73,6 +73,25 @@ class DiffMixin:
             return {'modified': [], 'added': [], 'deleted': []}
         return _parse_name_status(r.stdout)
 
+    def diff_local_vs_remote(self, branch: str) -> dict:
+        """
+        Diff local HEAD against origin/<branch> for nodes/ paths.  Use after
+        fetch_only() to learn what would change without actually merging.
+        Returns {'modified': [...], 'added': [...], 'deleted': [...]} where
+        'added' = exists on remote but not locally, 'deleted' = local only.
+        """
+        if not branch:
+            return {'modified': [], 'added': [], 'deleted': []}
+        ref = f'origin/{branch}'
+        # Use HEAD..ref so 'added' means files that the remote introduces.
+        r = self._run(
+            'diff', '--name-status', f'HEAD..{ref}', '--', 'nodes/',
+            check=False,
+        )
+        if r.returncode != 0 or not r.stdout.strip():
+            return {'modified': [], 'added': [], 'deleted': []}
+        return _parse_name_status(r.stdout)
+
     def diff_between(self, from_hash: str, to_hash: str) -> dict:
         """
         Like diff_since but diffs from_hash..to_hash instead of pre_hash..HEAD.

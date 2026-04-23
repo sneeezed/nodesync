@@ -35,6 +35,52 @@ def _get_token(context):
 
 
 # ---------------------------------------------------------------------------
+# Tree path resolution — maps a live bpy node tree to its on-disk JSON path
+# ---------------------------------------------------------------------------
+
+def _resolve_tree_rel_path(node_tree) -> tuple[str, str]:
+    """
+    Return (rel_path, display_name) for the given live node tree.
+    rel_path is the repo-relative JSON file path used by NodeSync.
+    display_name is what to show in the UI (material name or group name).
+    Returns ('', '') if the tree is not a tracked kind.
+
+    Embedded shader trees (Material/World/Light) are detected by walking
+    bpy.data.materials / worlds / lights and matching node_tree identity.
+    """
+    if node_tree is None:
+        return ('', '')
+
+    bl_idname = getattr(node_tree, 'bl_idname', '')
+    safe_tree_name = node_tree.name.replace('/', '_').replace('\\', '_')
+
+    if bl_idname == 'GeometryNodeTree':
+        return (f'nodes/{safe_tree_name}.json', node_tree.name)
+
+    if bl_idname == 'ShaderNodeTree':
+        # Distinguish standalone shader groups from embedded material/world/light trees
+        for collection_name, subdir in (
+            ('materials', 'materials'),
+            ('worlds',    'worlds'),
+            ('lights',    'lights'),
+        ):
+            collection = getattr(bpy.data, collection_name, None)
+            if collection is None:
+                continue
+            for owner in collection:
+                if getattr(owner, 'use_nodes', False) and owner.node_tree is node_tree:
+                    safe_owner = owner.name.replace('/', '_').replace('\\', '_')
+                    return (
+                        f'nodes/shader/{subdir}/{safe_owner}.json',
+                        f'{owner.name} ({collection_name[:-1]})',
+                    )
+        # Standalone shader node group
+        return (f'nodes/shader/{safe_tree_name}.json', node_tree.name)
+
+    return ('', '')
+
+
+# ---------------------------------------------------------------------------
 # Branch colour palette
 # ---------------------------------------------------------------------------
 

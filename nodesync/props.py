@@ -42,6 +42,15 @@ class NodeSyncConflictItem(bpy.types.PropertyGroup):
     resolved   : bpy.props.BoolProperty(default=False)
 
 
+class NodeSyncPullCandidate(bpy.types.PropertyGroup):
+    """One node group with pending changes from a fetched remote."""
+    group_name : bpy.props.StringProperty()
+    tree_type  : bpy.props.StringProperty()   # 'Geometry' or 'Shader'
+    rel_path   : bpy.props.StringProperty()   # repo-relative, e.g. nodes/shader/Foo.json
+    status     : bpy.props.StringProperty()   # 'modified', 'added', 'deleted'
+    selected   : bpy.props.BoolProperty(default=True)
+
+
 # Scene properties registered/unregistered by __init__.py
 SCENE_PROPS = {
     'nodesync_project_root': bpy.props.StringProperty(
@@ -139,7 +148,19 @@ SCENE_PROPS = {
     'nodesync_conflict_index': bpy.props.IntProperty(
         default     = 0,
     ),
+    # Selective pull
+    'nodesync_pull_candidates': bpy.props.CollectionProperty(
+        type        = NodeSyncPullCandidate,
+    ),
+    'nodesync_pull_index': bpy.props.IntProperty(
+        default     = 0,
+    ),
 }
 
 
-classes = [NodeSyncCommitItem, NodeSyncBranchItem, NodeSyncConflictItem]
+classes = [
+    NodeSyncCommitItem,
+    NodeSyncBranchItem,
+    NodeSyncConflictItem,
+    NodeSyncPullCandidate,
+]

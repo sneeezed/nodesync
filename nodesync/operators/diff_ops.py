@@ -5,7 +5,7 @@ Operators for viewing diffs between the live node tree and the last commit.
 import bpy
 import json
 
-from .helpers import _get_project, _get_repo
+from .helpers import _get_project, _get_repo, _resolve_tree_rel_path
 
 
 class NODESYNC_OT_enter_diff(bpy.types.Operator):
@@ -38,8 +38,10 @@ class NODESYNC_OT_enter_diff(bpy.types.Operator):
         current_data = export_node_group(node_tree)
 
         # Load the HEAD version from git
-        safe_name    = node_tree.name.replace('/', '_').replace('\\', '_')
-        git_rel_path = f'nodes/{safe_name}.json'
+        git_rel_path, _display = _resolve_tree_rel_path(node_tree)
+        if not git_rel_path:
+            self.report({'WARNING'}, "Active node tree is not tracked by NodeSync")
+            return {'CANCELLED'}
 
         try:
             repo = _get_repo(proj.root)

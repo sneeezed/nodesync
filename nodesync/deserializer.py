@@ -123,7 +123,7 @@ def _apply_type_specific(node, ts: dict):
     bl_idname = node.bl_idname
 
     # GROUP: resolve node tree reference
-    if bl_idname == 'GeometryNodeGroup':
+    if bl_idname in ('GeometryNodeGroup', 'ShaderNodeGroup'):
         ref = ts.get('node_tree_ref')
         if ref:
             ng = bpy.data.node_groups.get(ref)
@@ -287,6 +287,128 @@ def reconstruct_node_group(data: dict):
             print(f"[NodeSync] Could not create link: {e}")
 
     return ng
+
+
+def _rebuild_tree_in_place(ng, data: dict):
+    """
+    Clear ng's nodes/links and rebuild them from data — without touching the
+    surrounding bpy data-block.  Used both for standalone groups (after they
+    are created/cleared in reconstruct_node_group) and for embedded shader
+    trees owned by a Material/World/Light.
+
+    Splits the create-then-link pass out of reconstruct_node_group so it can
+    be reused without name lookups against bpy.data.node_groups.
+    """
+    _restore_interface(ng, data.get('interface', []))
+
+    node_map = {}
+    for ndata in data.get('nodes', []):
+        bl_idname = ndata['bl_idname']
+        try:
+            node = ng.nodes.new(bl_idname)
+        except Exception as e:
+            print(f"[NodeSync] Could not create node '{ndata['name']}' "
+                  f"({bl_idname}): {e}")
+            continue
+
+        node.name  = ndata['name']
+        node.label = ndata.get('label', '')
+        _apply_type_specific(node, ndata.get('type_specific', {}))
+        _restore_socket_defaults(node, ndata.get('inputs', []),  is_input=True)
+        _restore_socket_defaults(node, ndata.get('outputs', []), is_input=False)
+
+        loc = ndata.get('location', [0.0, 0.0])
+        node.location = (loc[0], loc[1])
+        node.width    = ndata.get('width', 140.0)
+        node.hide     = ndata.get('hide', False)
+        node.mute     = ndata.get('mute', False)
+        node.use_custom_color = ndata.get('use_custom_color', False)
+        color = ndata.get('color', [0.608, 0.608, 0.608])
+        node.color = (color[0], color[1], color[2])
+
+        node_map[ndata['name']] = node
+
+    for ndata in data.get('nodes', []):
+        parent_name = ndata.get('parent')
+        if parent_name and parent_name in node_map and ndata['name'] in node_map:
+            node_map[ndata['name']].parent = node_map[parent_name]
+
+    for ldata in data.get('links', []):
+        from_node = node_map.get(ldata['from_node'])
+        to_node   = node_map.get(ldata['to_node'])
+        if from_node is None or to_node is None:
+            print(f"[NodeSync] Link skipped — node not found: "
+                  f"{ldata['from_node']} → {ldata['to_node']}")
+            continue
+        from_id   = ldata['from_socket_identifier']
+        from_name = ldata.get('from_socket_name', '')
+        to_id     = ldata['to_socket_identifier']
+        to_name   = ldata.get('to_socket_name', '')
+
+        from_sock = (next((s for s in from_node.outputs if s.identifier == from_id), None)
+                     or next((s for s in from_node.outputs if s.name == from_name), None))
+        to_sock   = (next((s for s in to_node.inputs if s.identifier == to_id), None)
+                     or next((s for s in to_node.inputs if s.name == to_name), None))
+        if from_sock is None or to_sock is None:
+            print(f"[NodeSync] Link skipped — socket not found: "
+                  f"{ldata['from_node']}.{from_id}({from_name}) → "
+                  f"{ldata['to_node']}.{to_id}({to_name})")
+            continue
+        try:
+            ng.links.new(from_sock, to_sock)
+        except Exception as e:
+            print(f"[NodeSync] Could not create link: {e}")
+
+
+def reconstruct_embedded_shader(data: dict):
+    """
+    Reconstruct a shader node tree owned by a Material / World / Light.
+    Looks at data['owner_type'] ('materials' / 'worlds' / 'lights') and
+    data['owner_name'] to find or create the owner data-block, then rebuilds
+    its embedded node_tree in place.
+    Returns the owner data-block, or None on failure.
+    """
+    owner_type = data.get('owner_type')
+    owner_name = data.get('owner_name') or data.get('name')
+    if owner_type not in {'materials', 'worlds', 'lights'} or not owner_name:
+        print("[NodeSync] reconstruct_embedded_shader: missing owner_type/owner_name")
+        return None
+
+    collection = getattr(bpy.data, owner_type, None)
+    if collection is None:
+        print(f"[NodeSync] bpy.data.{owner_type} not available")
+        return None
+
+    owner = collection.get(owner_name)
+    if owner is None:
+        # Create a new data-block of the right kind so the embedded tree has a home
+        try:
+            if owner_type == 'materials':
+                owner = bpy.data.materials.new(owner_name)
+            elif owner_type == 'worlds':
+                owner = bpy.data.worlds.new(owner_name)
+            elif owner_type == 'lights':
+                # Default to POINT — there's no light shader without a light type
+                owner = bpy.data.lights.new(owner_name, type='POINT')
+        except Exception as e:
+            print(f"[NodeSync] Could not create {owner_type[:-1]} '{owner_name}': {e}")
+            return None
+
+    try:
+        owner.use_nodes = True
+    except Exception as e:
+        print(f"[NodeSync] Could not enable nodes on {owner_type[:-1]} "
+              f"'{owner_name}': {e}")
+        return None
+
+    nt = owner.node_tree
+    if nt is None:
+        print(f"[NodeSync] {owner_type[:-1]} '{owner_name}' has no node_tree")
+        return None
+
+    nt.nodes.clear()  # also clears all links
+    _rebuild_tree_in_place(nt, data)
+    return owner
 
 
 def reconstruct_all(all_data: list):

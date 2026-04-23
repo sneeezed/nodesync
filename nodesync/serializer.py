@@ -100,7 +100,7 @@ def _serialize_type_specific(node) -> dict:
     bl_idname = node.bl_idname
 
     # GROUP: store reference by name only — never inline-serialize
-    if bl_idname == 'GeometryNodeGroup':
+    if bl_idname in ('GeometryNodeGroup', 'ShaderNodeGroup'):
         if node.node_tree is not None:
             ts['node_tree_ref'] = node.node_tree.name
         return ts
@@ -182,8 +182,9 @@ def export_node_group(node_group) -> dict:
 
 def collect_all_groups(root_name: str) -> list:
     """
-    Return a list of all GeometryNodeTree names reachable from root_name,
+    Return a list of all node group names reachable from root_name,
     in dependency order (deepest dependencies first, root last).
+    Works for both GeometryNodeGroup and ShaderNodeGroup references.
     Safe against circular references.
     """
     visited = set()
@@ -198,7 +199,8 @@ def collect_all_groups(root_name: str) -> list:
             return
         # Visit all nested group references first
         for node in ng.nodes:
-            if node.bl_idname == 'GeometryNodeGroup' and node.node_tree is not None:
+            if (node.bl_idname in ('GeometryNodeGroup', 'ShaderNodeGroup')
+                    and node.node_tree is not None):
                 _visit(node.node_tree.name)
         order.append(name)
 

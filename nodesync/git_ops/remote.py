@@ -115,3 +115,85 @@ class RemoteMixin:
             msg = r.stderr.strip() or r.stdout.strip() or 'fetch failed'
             raise GitError(msg)
         return r.stdout.strip()
+
+    def fetch_only(self, token: str = '') -> str:
+        """
+        Fetch the current branch from origin so origin/<branch> is updated,
+        without touching the working tree.  Returns stdout.
+        """
+        remote_url = self.get_remote_url()
+        if not remote_url:
+            raise GitError("No remote URL configured.")
+        fetch_url = _inject_token(remote_url, token)
+        branch = self.current_branch()
+        r = self._run('fetch', fetch_url, branch, check=False, timeout=60)
+        if r.returncode != 0:
+            msg = r.stderr.strip() or r.stdout.strip() or 'fetch failed'
+            raise GitError(msg)
+        # Update the local origin/<branch> ref so diff_local_vs_remote sees it.
+        # Some Git configurations don't auto-update the remote-tracking ref
+        # when fetching a single branch; do it explicitly.
+        self._run(
+            'update-ref', f'refs/remotes/origin/{branch}', 'FETCH_HEAD',
+            check=False,
+        )
+        return r.stdout.strip()
+
+    def selective_pull(self, branch: str, selected_paths: list,
+                       unselected_paths: list, message: str) -> tuple[bool, list]:
+        """
+        Apply only the selected file changes from origin/<branch> into the
+        local branch as a single merge commit.  Unselected files keep their
+        local content.  Requires fetch_only() to have been called first.
+
+        Returns (has_conflicts, conflicted_files).  If conflicts arise, the
+        merge is left in-progress for the caller to resolve via the existing
+        conflict UI.
+        """
+        if not branch:
+            raise GitError("selective_pull: branch is required")
+
+        ref = f'origin/{branch}'
+
+        # If everything is selected, fall back to a normal merge.
+        if not unselected_paths:
+            r = self._run('merge', ref, '-m', message, check=False, timeout=60)
+            if r.returncode == 0:
+                return False, []
+            conflicted = self.get_conflicted_files()
+            if conflicted:
+                return True, conflicted
+            msg = r.stderr.strip() or r.stdout.strip() or 'merge failed'
+            raise GitError(msg)
+
+        # Start a no-commit merge so we can pick which file changes to keep.
+        r = self._run(
+            'merge', '--no-commit', '--no-ff', ref,
+            check=False, timeout=60,
+        )
+        # Conflicts at this point are the same shape as a normal merge — let
+        # the caller drive the conflict UI.
+        conflicted = self.get_conflicted_files()
+        if conflicted:
+            return True, conflicted
+        if r.returncode != 0:
+            # Cleanly back out so the worktree is left alone
+            self._run('merge', '--abort', check=False)
+            msg = r.stderr.strip() or r.stdout.strip() or 'merge failed'
+            raise GitError(msg)
+
+        # Revert unselected paths to local HEAD (drops the remote change).
+        for path in unselected_paths:
+            self._run('checkout', 'HEAD', '--', path, check=False)
+            # Also un-stage by re-adding the local version
+            self._run('add', path, check=False)
+
+        # Commit the selectively-merged result.
+        commit_r = self._run(
+            'commit', '-m', message, check=False, timeout=30,
+        )
+        if commit_r.returncode != 0:
+            msg = commit_r.stderr.strip() or commit_r.stdout.strip() or 'commit failed'
+            raise GitError(msg)
+
+        return False, []

@@ -248,10 +248,30 @@ class NODESYNC_OT_confirm_pull_changes(bpy.types.Operator):
         _pending_pull_changes['project_root'] = ''
 
 
+def _tree_type_for_path(rel_path: str) -> str:
+    """Human-readable label for the candidate's tree kind."""
+    if rel_path.startswith('nodes/shader/materials/'):
+        return 'Material'
+    if rel_path.startswith('nodes/shader/worlds/'):
+        return 'World'
+    if rel_path.startswith('nodes/shader/lights/'):
+        return 'Light'
+    if rel_path.startswith('nodes/shader/'):
+        return 'Shader'
+    return 'Geometry'
+
+
+def _group_name_for_path(rel_path: str) -> str:
+    """Strip directory and .json extension to get the group/owner name."""
+    base = os.path.basename(rel_path)
+    return base[:-5] if base.endswith('.json') else base
+
+
 class NODESYNC_OT_pull(bpy.types.Operator):
     bl_idname      = 'nodesync.pull'
     bl_label       = 'Pull'
-    bl_description = 'Pull latest commits from GitHub'
+    bl_description = ('Fetch from GitHub, then choose which node groups to '
+                      'apply from the incoming changes')
 
     @classmethod
     def poll(cls, context):
@@ -269,77 +289,219 @@ class NODESYNC_OT_pull(bpy.types.Operator):
 
         token = _get_token(context)
 
-        # Snapshot before anything changes so we can re-link modifiers later
+        from ..git_ops import GitRepo, GitError
+        try:
+            repo   = GitRepo(proj.root)
+            branch = repo.current_branch()
+            repo.fetch_only(token=token)
+            diff = repo.diff_local_vs_remote(branch)
+        except GitError as e:
+            scene.nodesync_sync_status = 'Fetch failed'
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+
+        modified = diff['modified']
+        added    = diff['added']
+        deleted  = diff['deleted']
+
+        if not (modified or added or deleted):
+            scene.nodesync_sync_status = 'Already up to date'
+            self.report({'INFO'}, "Already up to date — nothing to pull")
+            return {'FINISHED'}
+
+        # Populate the candidate list for the selection dialog
+        scene.nodesync_pull_candidates.clear()
+        for rel_path in modified:
+            item            = scene.nodesync_pull_candidates.add()
+            item.rel_path   = rel_path
+            item.group_name = _group_name_for_path(rel_path)
+            item.tree_type  = _tree_type_for_path(rel_path)
+            item.status     = 'modified'
+            item.selected   = True
+        for rel_path in added:
+            item            = scene.nodesync_pull_candidates.add()
+            item.rel_path   = rel_path
+            item.group_name = _group_name_for_path(rel_path)
+            item.tree_type  = _tree_type_for_path(rel_path)
+            item.status     = 'added'
+            item.selected   = True
+        for rel_path in deleted:
+            item            = scene.nodesync_pull_candidates.add()
+            item.rel_path   = rel_path
+            item.group_name = _group_name_for_path(rel_path)
+            item.tree_type  = _tree_type_for_path(rel_path)
+            item.status     = 'deleted'
+            item.selected   = True
+
+        scene.nodesync_sync_status = (
+            f'Fetched — {len(modified) + len(added) + len(deleted)} '
+            f'group(s) changed on remote'
+        )
+        bpy.ops.nodesync.select_pull_groups('INVOKE_DEFAULT')
+        return {'FINISHED'}
+
+
+class NODESYNC_OT_select_pull_groups(bpy.types.Operator):
+    bl_idname      = 'nodesync.select_pull_groups'
+    bl_label       = 'Select Groups to Pull'
+    bl_description = ('Choose which incoming node group changes to apply to '
+                      'your project')
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=460)
+
+    def draw(self, context):
+        layout = self.layout
+        scene  = context.scene
+
+        layout.label(text='Incoming changes from origin:', icon='IMPORT')
+        layout.separator()
+
+        # Quick toggle row
+        row = layout.row(align=True)
+        row.operator('nodesync.pull_select_all', text='Select All', icon='CHECKBOX_HLT')
+        row.operator('nodesync.pull_select_none', text='Select None', icon='CHECKBOX_DEHLT')
+
+        layout.separator()
+
+        if not scene.nodesync_pull_candidates:
+            layout.label(text='No candidates', icon='INFO')
+            return
+
+        # Per-group checkbox rows
+        col = layout.column(align=True)
+        for item in scene.nodesync_pull_candidates:
+            row = col.row(align=True)
+            row.prop(item, 'selected', text='')
+            status_icon = {
+                'modified': 'FILE_REFRESH',
+                'added':    'ADD',
+                'deleted':  'TRASH',
+            }.get(item.status, 'QUESTION')
+            row.label(text=item.group_name, icon=status_icon)
+            sub = row.row()
+            sub.alignment = 'RIGHT'
+            sub.label(text=f"[{item.tree_type}]  {item.status}")
+
+        layout.separator()
+        layout.label(text='Unselected groups will keep their local version.',
+                     icon='INFO')
+
+    def execute(self, context):
+        scene = context.scene
+        proj  = _get_project(scene)
+        if proj is None:
+            scene.nodesync_pull_candidates.clear()
+            self.report({'ERROR'}, "No active NodeSync project")
+            return {'CANCELLED'}
+
+        candidates = list(scene.nodesync_pull_candidates)
+        selected   = [c for c in candidates if c.selected]
+        unselected = [c for c in candidates if not c.selected]
+
+        if not selected:
+            scene.nodesync_pull_candidates.clear()
+            scene.nodesync_sync_status = 'Pull cancelled — nothing selected'
+            self.report({'INFO'}, "Nothing selected — pull cancelled")
+            return {'CANCELLED'}
+
+        # Snapshot modifier assignments before we touch anything
         _snapshot_modifier_links()
 
         from ..git_ops import GitRepo, GitError
         try:
-            repo = GitRepo(proj.root)
-            pre_hash = repo.current_commit_hash(short=False)
-            has_conflicts, conflicted_files = repo.pull(token=token)
+            repo   = GitRepo(proj.root)
+            branch = repo.current_branch()
+            sel_paths   = [c.rel_path for c in selected]
+            unsel_paths = [c.rel_path for c in unselected]
+
+            sel_names = ', '.join(c.group_name for c in selected)
+            message = (f"NodeSync selective pull: {sel_names}"
+                       if len(sel_names) < 200
+                       else f"NodeSync selective pull: {len(selected)} group(s)")
+
+            has_conflicts, conflicted = repo.selective_pull(
+                branch, sel_paths, unsel_paths, message,
+            )
         except GitError as e:
+            scene.nodesync_pull_candidates.clear()
             scene.nodesync_sync_status = 'Pull failed'
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
 
         if has_conflicts:
-            # Populate conflict list
             scene.nodesync_conflict_items.clear()
-            for filepath in conflicted_files:
+            for filepath in conflicted:
                 item            = scene.nodesync_conflict_items.add()
                 item.filepath   = filepath
-                # Derive display name from filename
                 basename        = os.path.basename(filepath)
                 item.group_name = basename[:-5] if basename.endswith('.json') else basename
                 item.resolved   = False
-            scene.nodesync_has_conflicts  = True
-            scene.nodesync_sync_status    = f'{len(conflicted_files)} conflict(s) — resolve in Conflicts panel'
+            scene.nodesync_has_conflicts = True
+            scene.nodesync_sync_status   = f'{len(conflicted)} conflict(s) — resolve in Conflicts panel'
+            scene.nodesync_pull_candidates.clear()
             self.report({'WARNING'},
-                        f"Pull produced {len(conflicted_files)} conflict(s). "
+                        f"Pull produced {len(conflicted)} conflict(s). "
                         "Use the Conflicts panel to resolve them.")
             return {'FINISHED'}
 
-        # Clean pull — selectively reimport only what changed
-        if not pre_hash:
-            # No prior commit (shouldn't happen, but fall back to full import)
-            imported = proj.import_all_from_disk()
-            _refresh_branches(scene, proj.root)
-            _refresh_history(scene, proj.root)
-            scene.nodesync_sync_status = 'Pulled OK'
-            self.report({'INFO'}, f"Pulled OK — {len(imported)} group(s) imported")
-            return {'FINISHED'}
+        # Apply selected changes to Blender state
+        modified_paths = [c.rel_path for c in selected if c.status == 'modified']
+        added_paths    = [c.rel_path for c in selected if c.status == 'added']
+        deleted_names  = [c.group_name for c in selected if c.status == 'deleted']
 
-        diff = repo.diff_since(pre_hash)
-        modified = diff['modified']
-        added    = diff['added']
-        deleted  = diff['deleted']
-
-        # Reconstruct groups whose files were modified
-        reimported = proj.import_specific_from_disk(modified) if modified else []
+        reimported = []
+        if modified_paths:
+            reimported += proj.import_specific_from_disk(modified_paths)
+        if added_paths:
+            reimported += proj.import_specific_from_disk(added_paths)
         _restore_modifier_links(reimported)
+
+        # Remove Blender groups whose files were dropped in this pull
+        removed = []
+        for name in deleted_names:
+            ng = bpy.data.node_groups.get(name)
+            if ng:
+                bpy.data.node_groups.remove(ng)
+                removed.append(name)
 
         _refresh_branches(scene, proj.root)
         _refresh_history(scene, proj.root)
+        scene.nodesync_pull_candidates.clear()
 
-        # If nothing needs confirmation just report and finish
-        if not added and not deleted:
-            count = len(reimported)
-            scene.nodesync_sync_status = 'Pulled OK'
-            self.report({'INFO'},
-                        f"Pulled OK — {count} group(s) updated" if count
-                        else "Pulled OK — already up to date")
-            return {'FINISHED'}
+        applied  = len(reimported) + len(removed)
+        skipped  = len(unselected)
+        status   = f'Pulled {applied} group(s)'
+        if skipped:
+            status += f' — {skipped} skipped'
+        scene.nodesync_sync_status = status
+        self.report({'INFO'}, status)
+        return {'FINISHED'}
 
-        # Populate the confirmation dialog and invoke it
-        _pending_pull_changes['creates'] = proj.load_group_data_from_disk(added)
-        _pending_pull_changes['deletes'] = [
-            os.path.basename(p)[:-5] if p.endswith('.json') else os.path.basename(p)
-            for p in deleted
-        ]
-        _pending_pull_changes['project_root'] = proj.root
+    def cancel(self, context):
+        context.scene.nodesync_pull_candidates.clear()
+        context.scene.nodesync_sync_status = 'Pull cancelled'
 
-        scene.nodesync_sync_status = 'Pulled OK — review changes below'
-        bpy.ops.nodesync.confirm_pull_changes('INVOKE_DEFAULT')
+
+class NODESYNC_OT_pull_select_all(bpy.types.Operator):
+    bl_idname  = 'nodesync.pull_select_all'
+    bl_label   = 'Select All'
+    bl_options = {'INTERNAL'}
+
+    def execute(self, context):
+        for item in context.scene.nodesync_pull_candidates:
+            item.selected = True
+        return {'FINISHED'}
+
+
+class NODESYNC_OT_pull_select_none(bpy.types.Operator):
+    bl_idname  = 'nodesync.pull_select_none'
+    bl_label   = 'Select None'
+    bl_options = {'INTERNAL'}
+
+    def execute(self, context):
+        for item in context.scene.nodesync_pull_candidates:
+            item.selected = False
         return {'FINISHED'}
 
 
@@ -349,4 +511,7 @@ classes = [
     NODESYNC_OT_push,
     NODESYNC_OT_confirm_pull_changes,
     NODESYNC_OT_pull,
+    NODESYNC_OT_select_pull_groups,
+    NODESYNC_OT_pull_select_all,
+    NODESYNC_OT_pull_select_none,
 ]
