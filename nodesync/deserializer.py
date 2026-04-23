@@ -112,10 +112,55 @@ def _restore_interface(node_group, interface_data: list):
             print(f"[NodeSync] 3.x interface socket creation failed: {e}")
 
 
-def _apply_type_specific(node, ts: dict):
+def _resolve_image(image_name: str, image_filepath: str,
+                   project_root: str | None) -> 'bpy.types.Image | None':
+    """
+    Find or load a bpy.types.Image by name.  Lookup order:
+      1. bpy.data.images by exact name (already in memory)
+      2. bpy.data.images by filepath (avoids duplicates for differently-named reloads)
+      3. Load from project textures/ directory (uses image_name as filename)
+      4. Load from the stored image_filepath (absolute or blend-relative)
+    Returns None if the image cannot be found or loaded.
+    """
+    import os
+
+    # 1. Exact name match
+    img = bpy.data.images.get(image_name)
+    if img is not None:
+        return img
+
+    # 2. Already loaded under same filepath
+    if project_root:
+        tex_path = os.path.join(project_root, 'textures', image_name)
+        if os.path.isfile(tex_path):
+            for existing in bpy.data.images:
+                if bpy.path.abspath(existing.filepath) == os.path.abspath(tex_path):
+                    return existing
+            try:
+                img = bpy.data.images.load(tex_path, check_existing=True)
+                img.name = image_name
+                return img
+            except Exception as e:
+                print(f"[NodeSync] Could not load texture from textures/: {e}")
+
+    # 3. Load from the original filepath recorded at export time
+    if image_filepath:
+        abs_fp = bpy.path.abspath(image_filepath)
+        if os.path.isfile(abs_fp):
+            try:
+                img = bpy.data.images.load(abs_fp, check_existing=True)
+                return img
+            except Exception as e:
+                print(f"[NodeSync] Could not load image from original path: {e}")
+
+    return None
+
+
+def _apply_type_specific(node, ts: dict, project_root: str | None = None):
     """
     Apply type_specific properties to a node.
     Must be called BEFORE reading socket identifiers (some props add/remove sockets).
+    project_root is forwarded to _resolve_image for texture lookup.
     """
     if not ts:
         return
@@ -148,8 +193,30 @@ def _apply_type_specific(node, ts: dict):
                 pass
         return
 
-    # General case
+    # Image-referencing nodes: restore .image before other props
+    if bl_idname in ('ShaderNodeTexImage', 'ShaderNodeTexEnvironment'):
+        image_name = ts.get('image_name')
+        if image_name:
+            img = _resolve_image(
+                image_name,
+                ts.get('image_filepath') or '',
+                project_root,
+            )
+            if img is not None:
+                try:
+                    node.image = img
+                except Exception as e:
+                    print(f"[NodeSync] Could not assign image '{image_name}': {e}")
+            else:
+                print(f"[NodeSync] Image '{image_name}' not found — "
+                      f"node will have no texture assigned")
+        # Fall through to also restore interpolation / projection / extension
+
+    # General case — skip image_name / image_filepath (data-block refs, not settable)
+    skip = {'image_name', 'image_filepath'}
     for prop, val in ts.items():
+        if prop in skip:
+            continue
         if hasattr(node, prop):
             try:
                 setattr(node, prop, val)
@@ -185,14 +252,14 @@ def _restore_socket_defaults(node, sockets_data: list, is_input: bool):
                           f"{node.name}.{sock.name}: {e}")
 
 
-def reconstruct_node_group(data: dict):
+def reconstruct_node_group(data: dict, project_root: str | None = None):
     """
-    Reconstruct a GeometryNodeTree from a serialized dict.
+    Reconstruct a node group from a serialized dict.
     If a group with this name already exists it is cleared and rebuilt in place.
     Returns the reconstructed bpy node group, or None on failure.
 
-    Dependency requirement: any nested group referenced by node_tree_ref must
-    already exist in bpy.data.node_groups before this function is called.
+    project_root is the filesystem root of the NodeSync project; when provided
+    it is used to resolve ShaderNodeTexImage images from the textures/ folder.
     """
     name = data.get('name')
     if not name:
@@ -232,7 +299,7 @@ def reconstruct_node_group(data: dict):
         node.label = ndata.get('label', '')
 
         # Apply type_specific BEFORE reading socket identifiers
-        _apply_type_specific(node, ndata.get('type_specific', {}))
+        _apply_type_specific(node, ndata.get('type_specific', {}), project_root)
 
         # Restore socket defaults (identifiers are now stable)
         _restore_socket_defaults(node, ndata.get('inputs', []), is_input=True)
@@ -289,7 +356,7 @@ def reconstruct_node_group(data: dict):
     return ng
 
 
-def _rebuild_tree_in_place(ng, data: dict):
+def _rebuild_tree_in_place(ng, data: dict, project_root: str | None = None):
     """
     Clear ng's nodes/links and rebuild them from data — without touching the
     surrounding bpy data-block.  Used both for standalone groups (after they
@@ -313,7 +380,7 @@ def _rebuild_tree_in_place(ng, data: dict):
 
         node.name  = ndata['name']
         node.label = ndata.get('label', '')
-        _apply_type_specific(node, ndata.get('type_specific', {}))
+        _apply_type_specific(node, ndata.get('type_specific', {}), project_root)
         _restore_socket_defaults(node, ndata.get('inputs', []),  is_input=True)
         _restore_socket_defaults(node, ndata.get('outputs', []), is_input=False)
 
@@ -360,12 +427,14 @@ def _rebuild_tree_in_place(ng, data: dict):
             print(f"[NodeSync] Could not create link: {e}")
 
 
-def reconstruct_embedded_shader(data: dict):
+def reconstruct_embedded_shader(data: dict, project_root: str | None = None):
     """
     Reconstruct a shader node tree owned by a Material / World / Light.
     Looks at data['owner_type'] ('materials' / 'worlds' / 'lights') and
     data['owner_name'] to find or create the owner data-block, then rebuilds
     its embedded node_tree in place.
+    project_root is forwarded to image resolution so ShaderNodeTexImage nodes
+    can load files from the project textures/ directory.
     Returns the owner data-block, or None on failure.
     """
     owner_type = data.get('owner_type')
@@ -407,7 +476,7 @@ def reconstruct_embedded_shader(data: dict):
         return None
 
     nt.nodes.clear()  # also clears all links
-    _rebuild_tree_in_place(nt, data)
+    _rebuild_tree_in_place(nt, data, project_root)
     return owner
 
 

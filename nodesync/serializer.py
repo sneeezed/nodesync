@@ -114,7 +114,15 @@ def _serialize_type_specific(node) -> dict:
             ts['text'] = None
         return ts
 
-    # General case: use the known props list, then fall back to an introspection
+    # Image-referencing nodes: store the image name separately so the
+    # deserializer can reload the file from textures/ if needed.
+    if bl_idname in ('ShaderNodeTexImage', 'ShaderNodeTexEnvironment'):
+        img = getattr(node, 'image', None)
+        ts['image_name']     = img.name     if img is not None else None
+        ts['image_filepath'] = img.filepath if img is not None else None
+        # Fall through to also capture interpolation / projection / extension etc.
+
+    # General case: use the known props list
     known_props = TYPE_SPECIFIC_PROPS.get(bl_idname, None)
 
     if known_props is not None:
@@ -126,10 +134,6 @@ def _serialize_type_specific(node) -> dict:
                     ts[prop] = val
                 except Exception:
                     pass
-    else:
-        # Unknown node type: try to capture any non-default RNA props
-        # This is a best-effort fallback for node types not in TYPE_SPECIFIC_PROPS
-        pass
 
     return ts
 

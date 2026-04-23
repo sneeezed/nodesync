@@ -5,7 +5,7 @@ NodeSync — Git-backed version control for Blender Geometry Node trees.
 bl_info = {
     'name':        'NodeSync',
     'author':      'NodeSync',
-    'version':     (1, 0, 0),
+    'version':     (1, 0, 1),
     'blender':     (4, 0, 0),
     'location':    'Geometry / Shader Node Editor > N-Panel > NodeSync',
     'description': 'Git-backed version control for Geometry and Shader Node trees',

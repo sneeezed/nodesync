@@ -261,7 +261,7 @@ class NodeSyncProject:
             try:
                 with open(path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                ng = reconstruct_node_group(data)
+                ng = reconstruct_node_group(data, self.root)
                 if ng:
                     imported.append(ng.name)
             except Exception as e:
@@ -279,7 +279,7 @@ class NodeSyncProject:
                 try:
                     with open(path, 'r', encoding='utf-8') as fh:
                         data = json.load(fh)
-                    owner = reconstruct_embedded_shader(data)
+                    owner = reconstruct_embedded_shader(data, self.root)
                     if owner is not None:
                         imported.append(f"{data.get('owner_type', '')[:-1]}:{owner.name}")
                 except Exception as e:
@@ -305,11 +305,11 @@ class NodeSyncProject:
                 with open(abs_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 if data.get('owner_type') in {'materials', 'worlds', 'lights'}:
-                    owner = reconstruct_embedded_shader(data)
+                    owner = reconstruct_embedded_shader(data, self.root)
                     if owner is not None:
                         imported.append(owner.name)
                 else:
-                    ng = reconstruct_node_group(data)
+                    ng = reconstruct_node_group(data, self.root)
                     if ng:
                         imported.append(ng.name)
             except Exception as e:
