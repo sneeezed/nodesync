@@ -1,5 +1,7 @@
 # NodeSync
 
+![NodeSync Demo](NodeSyncDemo.gif)
+
 **NodeSync** is a Blender addon that brings Git-based version control to your node trees. It tracks Geometry Nodes, Shader Nodes (materials, worlds, and lights), and the image textures they reference — letting you commit, branch, push, pull, and restore your setups just like source code, with full GitHub integration and a live diff overlay.
 
 Each node tree is serialized to a JSON file and tracked individually in Git, giving you a precise history of every change. Branch for experiments, collaborate through GitHub, and restore any version in seconds.
