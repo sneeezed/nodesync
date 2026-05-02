@@ -5,7 +5,7 @@ NodeSync — Git-backed version control for Blender Geometry Node trees.
 bl_info = {
     'name':        'NodeSync',
     'author':      'NodeSync',
-    'version':     (1, 0, 2),
+    'version':     (1, 0, 3),
     'blender':     (4, 0, 0),
     'location':    'Geometry / Shader Node Editor > N-Panel > NodeSync',
     'description': 'Git-backed version control for Geometry and Shader Node trees',
@@ -148,6 +148,32 @@ def _nodesync_save_post(*args):
 
 
 # ---------------------------------------------------------------------------
+# Auto-load hook — fires after a .blend file is opened
+# ---------------------------------------------------------------------------
+
+@persistent
+def _nodesync_load_post(*args):
+    try:
+        scene = bpy.context.scene
+        root  = getattr(scene, 'nodesync_project_root', '').strip()
+        if not root or not os.path.isdir(root):
+            return
+        if not os.path.isfile(os.path.join(root, '.nodesync')):
+            return
+        from .project import NodeSyncProject
+        from .operators.helpers import _refresh_history, _refresh_branches
+        proj = NodeSyncProject(root)
+        saved_url = proj.get_remote_url()
+        if saved_url:
+            scene.nodesync_remote_url = saved_url
+        _refresh_branches(scene, root)
+        _refresh_history(scene, root)
+        print(f"[NodeSync] Auto-loaded project from {root}")
+    except Exception as e:
+        print(f"[NodeSync] Auto-load error: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Register / Unregister
 # ---------------------------------------------------------------------------
 
@@ -179,6 +205,10 @@ def register():
     if _nodesync_save_post not in bpy.app.handlers.save_post:
         bpy.app.handlers.save_post.append(_nodesync_save_post)
 
+    # 6. Load hook — auto-loads project when a .blend is opened
+    if _nodesync_load_post not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(_nodesync_load_post)
+
     print("[NodeSync] Addon registered")
 
 
@@ -189,9 +219,11 @@ def unregister():
         bpy.utils.previews.remove(_previews)
         _previews = None
 
-    # Remove save hook first
+    # Remove hooks first
     if _nodesync_save_post in bpy.app.handlers.save_post:
         bpy.app.handlers.save_post.remove(_nodesync_save_post)
+    if _nodesync_load_post in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_nodesync_load_post)
 
     # Unregister in reverse order
     for cls in reversed(panels.classes):

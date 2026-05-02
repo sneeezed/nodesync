@@ -149,28 +149,28 @@ class NODE_PT_nodesync_project(bpy.types.Panel):
         scene  = context.scene
         root   = _active_root(scene)
 
-        # Folder path row
+        # Folder path row — browse button works for any directory
         row = layout.row(align=True)
         row.prop(scene, 'nodesync_project_root', text='')
         row.operator('nodesync.open_project', text='', icon='FILE_FOLDER')
 
-        # Action buttons — Clone is the primary action for connecting to an existing repo
-        col = layout.column(align=True)
-        col.scale_y = 1.2
-        col.operator('nodesync.clone_from_github', icon='IMPORT')
-        col.operator('nodesync.init_project', text='Init New Project', icon='NEWFOLDER')
+        has_project = bool(
+            root
+            and os.path.isdir(root)
+            and os.path.isfile(os.path.join(root, '.nodesync'))
+        )
 
-        # Status — only show once a valid project is set
-        if root and os.path.isdir(root):
-            box = layout.box()
-            col = box.column(align=True)
-            blend = bpy.data.filepath
-            if blend:
-                col.label(text=os.path.basename(blend), icon='FILE_BLEND')
-
+        if not has_project:
+            # No initialized project — show setup options
+            if root and not os.path.isdir(root):
+                layout.label(text='Folder not found', icon='ERROR')
+            col = layout.column(align=True)
+            col.scale_y = 1.2
+            col.operator('nodesync.clone_from_github', icon='IMPORT')
+            col.operator('nodesync.init_project', text='Init New Project', icon='NEWFOLDER')
+        else:
+            # Project is loaded — show GitHub / remote section
             layout.separator()
-
-            # GitHub / Remote section
             layout.label(text='GitHub', icon='URL')
             row = layout.row(align=True)
             row.prop(scene, 'nodesync_remote_url', text='', placeholder='https://github.com/user/repo')
@@ -178,19 +178,15 @@ class NODE_PT_nodesync_project(bpy.types.Panel):
 
             row = layout.row(align=True)
             row.scale_y = 1.2
-            push_op = row.operator('nodesync.push', text='Push ↑', icon='EXPORT')
-            pull_op = row.operator('nodesync.pull', text='Pull ↓', icon='IMPORT')
+            row.operator('nodesync.push', text='Push ↑', icon='EXPORT')
+            row.operator('nodesync.pull', text='Pull ↓', icon='IMPORT')
 
             if scene.nodesync_sync_status:
                 status = scene.nodesync_sync_status
                 is_error = 'failed' in status.lower() or 'conflict' in status.lower()
-                box2 = layout.box()
-                box2.alert = is_error
-                box2.label(text=status,
-                           icon='ERROR' if is_error else 'INFO')
-
-        elif root:
-            layout.label(text='Folder not found', icon='ERROR')
+                box = layout.box()
+                box.alert = is_error
+                box.label(text=status, icon='ERROR' if is_error else 'INFO')
 
 
 # ---------------------------------------------------------------------------

@@ -87,24 +87,21 @@ class NODESYNC_OT_open_project(bpy.types.Operator):
             self.report({'ERROR'}, f"Not a directory: {root}")
             return {'CANCELLED'}
 
+        context.scene.nodesync_project_root = root
+
         from ..project import NodeSyncProject
         proj = NodeSyncProject(root)
 
-        if not proj.config_exists():
-            self.report({'ERROR'},
-                        "No .nodesync config found — use 'Initialize Project' first")
-            return {'CANCELLED'}
+        if proj.config_exists():
+            saved_url = proj.get_remote_url()
+            if saved_url:
+                context.scene.nodesync_remote_url = saved_url
+            _refresh_branches(context.scene, root)
+            _refresh_history(context.scene, root)
+            self.report({'INFO'}, f"Opened: {root}")
+        else:
+            self.report({'INFO'}, "Folder set — press 'Init New Project' to initialize")
 
-        context.scene.nodesync_project_root = root
-
-        # Load remote URL from config
-        saved_url = proj.get_remote_url()
-        if saved_url:
-            context.scene.nodesync_remote_url = saved_url
-
-        _refresh_branches(context.scene, root)
-        _refresh_history(context.scene, root)
-        self.report({'INFO'}, f"Opened: {root}")
         return {'FINISHED'}
 
 
