@@ -137,6 +137,10 @@ SCENE_PROPS = {
         name    = 'History Filter Label',
         default = '',
     ),
+    'nodesync_history_filter_type': bpy.props.StringProperty(
+        name    = 'History Filter Type',
+        default = '',  # '', 'TREE', 'GEO', 'SHADER'
+    ),
     # Conflicts
     'nodesync_has_conflicts': bpy.props.BoolProperty(
         name        = 'Has Conflicts',

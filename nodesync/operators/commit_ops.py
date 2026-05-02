@@ -256,6 +256,7 @@ class NODESYNC_OT_refresh_history(bpy.types.Operator):
         root  = scene.nodesync_project_root.strip()
         scene.nodesync_history_filter_active = False
         scene.nodesync_history_filter_label  = ''
+        scene.nodesync_history_filter_type   = ''
         _refresh_branches(scene, root)
         _refresh_history(scene, root)
         self.report({'INFO'}, f"History refreshed: {len(scene.nodesync_commit_history)} commits")
@@ -345,9 +346,11 @@ class NODESYNC_OT_toggle_history_filter(bpy.types.Operator):
         scene = context.scene
         root  = scene.nodesync_project_root.strip()
 
+        # Clear any active filter
         if scene.nodesync_history_filter_active:
             scene.nodesync_history_filter_active = False
             scene.nodesync_history_filter_label  = ''
+            scene.nodesync_history_filter_type   = ''
             _refresh_history(scene, root)
             return {'FINISHED'}
 
@@ -372,9 +375,63 @@ class NODESYNC_OT_toggle_history_filter(bpy.types.Operator):
 
         scene.nodesync_history_filter_active = True
         scene.nodesync_history_filter_label  = display_name
+        scene.nodesync_history_filter_type   = 'TREE'
         _refresh_history(scene, root, filter_hashes=hashes)
         count = len(scene.nodesync_commit_history)
         self.report({'INFO'}, f"Filtered to {count} commit(s) for '{display_name}'")
+        return {'FINISHED'}
+
+
+class NODESYNC_OT_filter_history_by_type(bpy.types.Operator):
+    bl_idname      = 'nodesync.filter_history_by_type'
+    bl_label       = 'Filter History by Type'
+    bl_description = 'Show only commits that affected geometry nodes or shader nodes'
+
+    tree_type: bpy.props.EnumProperty(
+        items=[
+            ('GEO',    'Geometry Nodes', 'Show commits that touched geometry node groups'),
+            ('SHADER', 'Shader Nodes',   'Show commits that touched shader node trees'),
+        ]
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return bool(context.scene.nodesync_project_root.strip())
+
+    def execute(self, context):
+        scene = context.scene
+        root  = scene.nodesync_project_root.strip()
+
+        # Toggle off if already active with the same type
+        if (scene.nodesync_history_filter_active
+                and scene.nodesync_history_filter_type == self.tree_type):
+            scene.nodesync_history_filter_active = False
+            scene.nodesync_history_filter_label  = ''
+            scene.nodesync_history_filter_type   = ''
+            _refresh_history(scene, root)
+            return {'FINISHED'}
+
+        try:
+            from ..git_ops import GitRepo
+            repo = GitRepo(root)
+            if self.tree_type == 'SHADER':
+                hashes = repo.log_for_file('nodes/shader/')
+                label  = 'Shader nodes'
+            else:
+                all_nodes    = repo.log_for_file('nodes/')
+                shader_nodes = repo.log_for_file('nodes/shader/')
+                hashes = all_nodes - shader_nodes
+                label  = 'Geometry nodes'
+        except Exception as e:
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+
+        scene.nodesync_history_filter_active = True
+        scene.nodesync_history_filter_label  = label
+        scene.nodesync_history_filter_type   = self.tree_type
+        _refresh_history(scene, root, filter_hashes=hashes)
+        count = len(scene.nodesync_commit_history)
+        self.report({'INFO'}, f"Showing {count} commit(s) for {label}")
         return {'FINISHED'}
 
 
@@ -383,4 +440,5 @@ classes = [
     NODESYNC_OT_refresh_history,
     NODESYNC_OT_checkout_commit,
     NODESYNC_OT_toggle_history_filter,
+    NODESYNC_OT_filter_history_by_type,
 ]

@@ -362,20 +362,44 @@ class NODE_PT_nodesync_history(bpy.types.Panel):
             layout.label(text='Initialize a project first', icon='ERROR')
             return
 
+        from .operators.helpers import _resolve_tree_rel_path
+
+        filter_active = scene.nodesync_history_filter_active
+        filter_type   = getattr(scene, 'nodesync_history_filter_type', '')
+
+        # Row 1: refresh + per-tree filter button
         row = layout.row(align=True)
         row.operator('nodesync.refresh_history', text='', icon='FILE_REFRESH')
 
         nt = getattr(context.space_data, 'node_tree', None)
-        if nt:
-            if scene.nodesync_history_filter_active:
+        if filter_active and filter_type == 'TREE':
+            label     = scene.nodesync_history_filter_label
+            short     = label[:18] + ('…' if len(label) > 18 else '')
+            row.operator('nodesync.toggle_history_filter',
+                         text=f'{short} ×', icon='X')
+        elif not filter_active and nt:
+            _, display_name = _resolve_tree_rel_path(nt)
+            if display_name:
+                short = display_name[:16] + ('…' if len(display_name) > 16 else '')
                 row.operator('nodesync.toggle_history_filter',
-                             text='All commits', icon='X')
-            else:
-                short_name = nt.name[:18] + ('…' if len(nt.name) > 18 else '')
-                row.operator('nodesync.toggle_history_filter',
-                             text=f'{short_name} only', icon='FILTER')
+                             text=f'{short} only', icon='FILTER')
 
-        if scene.nodesync_history_filter_active:
+        # Row 2: type filter buttons
+        row2 = layout.row(align=True)
+        geo_op = row2.operator(
+            'nodesync.filter_history_by_type',
+            text='Geo ×' if filter_type == 'GEO' else 'Geo',
+            icon='X' if filter_type == 'GEO' else 'GEOMETRY_NODES',
+        )
+        geo_op.tree_type = 'GEO'
+        shader_op = row2.operator(
+            'nodesync.filter_history_by_type',
+            text='Shader ×' if filter_type == 'SHADER' else 'Shader',
+            icon='X' if filter_type == 'SHADER' else 'MATERIAL',
+        )
+        shader_op.tree_type = 'SHADER'
+
+        if filter_active:
             layout.label(
                 text=f'Filtered: {scene.nodesync_history_filter_label}',
                 icon='INFO',
@@ -421,7 +445,7 @@ classes = [
     NODE_PT_nodesync,
     NODE_PT_nodesync_project,
     NODE_PT_nodesync_vc,
-    NODE_PT_nodesync_branches,
     NODE_PT_nodesync_conflicts,
     NODE_PT_nodesync_history,
+    NODE_PT_nodesync_branches,
 ]
