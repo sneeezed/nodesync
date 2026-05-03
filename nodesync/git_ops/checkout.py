@@ -21,7 +21,15 @@ class CheckoutMixin:
         Returns None if there are no commits yet or the file doesn't exist
         in HEAD (e.g. a newly added group that hasn't been committed).
         """
-        r = self._run('show', f'HEAD:{git_relative_path}', check=False)
+        return self.show_file_at_commit('HEAD', git_relative_path)
+
+    def show_file_at_commit(self, ref: str, git_relative_path: str) -> str | None:
+        """Return the contents of a file at *ref* as a string.
+
+        Returns None if the ref doesn't exist or the file is missing at that
+        revision.
+        """
+        r = self._run('show', f'{ref}:{git_relative_path}', check=False)
         if r.returncode != 0:
             return None
         return r.stdout

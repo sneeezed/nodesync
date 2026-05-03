@@ -79,6 +79,12 @@ SCENE_PROPS = {
         description = 'Whether the visual diff overlay is currently shown',
         default     = False,
     ),
+    'nodesync_diff_base_hash': bpy.props.StringProperty(
+        name        = 'Diff Base Hash',
+        description = ('Full commit hash to use as the diff comparison base. '
+                       'Empty means compare against HEAD.'),
+        default     = '',
+    ),
     # Clone workflow
     'nodesync_clone_url': bpy.props.StringProperty(
         name        = 'Clone URL',

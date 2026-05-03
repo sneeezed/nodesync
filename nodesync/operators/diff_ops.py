@@ -43,26 +43,30 @@ class NODESYNC_OT_enter_diff(bpy.types.Operator):
             self.report({'WARNING'}, "Active node tree is not tracked by NodeSync")
             return {'CANCELLED'}
 
+        base_hash = scene.nodesync_diff_base_hash.strip()
+        ref       = base_hash if base_hash else 'HEAD'
+        ref_label = base_hash[:8] if base_hash else 'HEAD'
+
         try:
-            repo = _get_repo(proj.root)
-            head_json = repo.show_file_at_head(git_rel_path)
+            repo     = _get_repo(proj.root)
+            base_json = repo.show_file_at_commit(ref, git_rel_path)
         except Exception as e:
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
 
-        if head_json is None:
-            # No commits yet or group never committed — everything is "new"
-            head_data = {'nodes': [], 'links': []}
-            self.report({'INFO'}, "No committed version found — all nodes marked as new")
+        if base_json is None:
+            base_data = {'nodes': [], 'links': []}
+            self.report({'INFO'},
+                        f"No version of this group at {ref_label} — all nodes marked as new")
         else:
             try:
-                head_data = json.loads(head_json)
+                base_data = json.loads(base_json)
             except Exception as e:
-                self.report({'ERROR'}, f"Could not parse HEAD JSON: {e}")
+                self.report({'ERROR'}, f"Could not parse JSON at {ref_label}: {e}")
                 return {'CANCELLED'}
 
         from ..diff import compute_diff, apply_diff_overlay
-        diff = compute_diff(head_data, current_data)
+        diff = compute_diff(base_data, current_data)
 
         apply_diff_overlay(node_tree, diff)
         scene.nodesync_diff_active = True
@@ -71,7 +75,8 @@ class NODESYNC_OT_enter_diff(bpy.types.Operator):
         modified = len(diff['modified'])
         removed  = len(diff['removed'])
         self.report({'INFO'},
-                    f"Diff: {added} added, {modified} modified, {removed} deleted")
+                    f"Diff: live vs {ref_label} — "
+                    f"{added} added, {modified} modified, {removed} deleted")
         return {'FINISHED'}
 
 
@@ -107,8 +112,49 @@ class NODESYNC_OT_exit_diff(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class NODESYNC_OT_set_diff_base(bpy.types.Operator):
+    bl_idname  = 'nodesync.set_diff_base'
+    bl_label   = 'Pin as Diff Base'
+    bl_description = ('Pin this commit as the diff comparison base. '
+                      "View Diff will compare the live tree against this "
+                      'commit instead of HEAD. Click again to unpin.')
+
+    commit_hash : bpy.props.StringProperty()
+
+    @classmethod
+    def poll(cls, context):
+        return bool(context.scene.nodesync_project_root.strip())
+
+    def execute(self, context):
+        scene = context.scene
+        if scene.nodesync_diff_base_hash == self.commit_hash:
+            scene.nodesync_diff_base_hash = ''
+            self.report({'INFO'}, "Diff base cleared — comparing against HEAD")
+        else:
+            scene.nodesync_diff_base_hash = self.commit_hash
+            self.report({'INFO'}, f"Diff base pinned to {self.commit_hash[:8]}")
+        return {'FINISHED'}
+
+
+class NODESYNC_OT_clear_diff_base(bpy.types.Operator):
+    bl_idname  = 'nodesync.clear_diff_base'
+    bl_label   = 'Clear Diff Base'
+    bl_description = 'Reset the diff comparison base back to HEAD'
+
+    @classmethod
+    def poll(cls, context):
+        return bool(context.scene.nodesync_diff_base_hash)
+
+    def execute(self, context):
+        context.scene.nodesync_diff_base_hash = ''
+        self.report({'INFO'}, "Diff base cleared — comparing against HEAD")
+        return {'FINISHED'}
+
+
 classes = [
     NODESYNC_OT_enter_diff,
     NODESYNC_OT_diff_legend,
     NODESYNC_OT_exit_diff,
+    NODESYNC_OT_set_diff_base,
+    NODESYNC_OT_clear_diff_base,
 ]

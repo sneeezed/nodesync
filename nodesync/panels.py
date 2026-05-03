@@ -62,9 +62,6 @@ class NODESYNC_UL_history(bpy.types.UIList):
             row.label(text=f"{item.hash}", icon='FILE_TICK')
             col = row.column()
             col.label(text=item.subject[:30] + ('…' if len(item.subject) > 30 else ''))
-            col = row.column()
-            col.scale_x = 0.6
-            col.label(text=item.date)
             op = row.operator('nodesync.checkout_commit', text='', icon='LOOP_BACK')
             op.commit_hash = item.full_hash
         elif self.layout_type == 'GRID':
@@ -399,6 +396,13 @@ class NODE_PT_nodesync_history(bpy.types.Panel):
         )
         shader_op.tree_type = 'SHADER'
 
+        # Diff base status — shows when a non-HEAD commit is pinned
+        diff_base = scene.nodesync_diff_base_hash
+        if diff_base:
+            base_row = layout.row(align=True)
+            base_row.label(text=f'Diff base: {diff_base[:8]}', icon='PINNED')
+            base_row.operator('nodesync.clear_diff_base', text='', icon='X')
+
         if filter_active:
             layout.label(
                 text=f'Filtered: {scene.nodesync_history_filter_label}',
@@ -422,7 +426,20 @@ class NODE_PT_nodesync_history(bpy.types.Panel):
             item = scene.nodesync_commit_history[idx]
             box  = layout.box()
             col  = box.column(align=True)
-            col.label(text=item.hash,    icon='FILE_TICK')
+
+            # Hash row with diff-base pin button on the right
+            head_row = col.row(align=True)
+            head_row.label(text=item.hash, icon='FILE_TICK')
+            is_pinned = bool(item.full_hash
+                             and item.full_hash == scene.nodesync_diff_base_hash)
+            pin_op = head_row.operator(
+                'nodesync.set_diff_base',
+                text='Diff base' if is_pinned else 'Pin as diff base',
+                icon='PINNED' if is_pinned else 'UNPINNED',
+                depress=is_pinned,
+            )
+            pin_op.commit_hash = item.full_hash
+
             col.label(text=item.subject, icon='NONE')
             col.label(text=f"{item.author}  {item.date}", icon='NONE')
             if item.decorations:
