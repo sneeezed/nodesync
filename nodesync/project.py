@@ -13,6 +13,7 @@ import json
 
 CONFIG_FILENAME = '.nodesync'
 NODES_DIRNAME   = 'nodes'
+ASSIGNMENTS_FILENAME = '_scene_assignments.json'
 SHADER_SUBDIR   = 'shader'
 MATERIALS_SUBDIR = 'materials'
 WORLDS_SUBDIR    = 'worlds'
@@ -35,6 +36,7 @@ class NodeSyncProject:
         self.root          = os.path.normpath(root)
         self.config_path   = os.path.join(self.root, CONFIG_FILENAME)
         self.nodes_dir     = os.path.join(self.root, NODES_DIRNAME)
+        self.assignments_path = os.path.join(self.root, NODES_DIRNAME, ASSIGNMENTS_FILENAME)
         self.shader_dir    = os.path.join(self.nodes_dir, SHADER_SUBDIR)
         self.materials_dir = os.path.join(self.shader_dir, MATERIALS_SUBDIR)
         self.worlds_dir    = os.path.join(self.shader_dir, WORLDS_SUBDIR)
@@ -232,7 +234,109 @@ class NodeSyncProject:
                     print(f"[NodeSync] Failed to export "
                           f"{collection_name[:-1]} '{owner.name}': {e}")
 
+        try:
+            self.export_scene_assignments()
+        except Exception as e:
+            print(f"[NodeSync] Failed to export scene assignments: {e}")
+
         return exported
+
+    # ------------------------------------------------------------------
+    # Scene assignments — records which objects use which materials and
+    # which Geometry Nodes modifiers point at which node groups.  Lives in
+    # nodes/_scene_assignments.json so it travels with the repo and survives
+    # across sessions, clones, and machines.
+    # ------------------------------------------------------------------
+
+    def export_scene_assignments(self) -> str:
+        """Walk all objects and record their material slots + GN modifier links.
+        Writes to nodes/_scene_assignments.json (only when content changes)."""
+        import bpy
+        material_slots = {}   # object_name → [material_name | null per slot]
+        modifier_links = {}   # object_name → {modifier_name: node_group_name}
+
+        for obj in bpy.data.objects:
+            if obj.material_slots:
+                slots = [s.material.name if s.material else None
+                         for s in obj.material_slots]
+                if any(s is not None for s in slots):
+                    material_slots[obj.name] = slots
+            mods = {}
+            for mod in obj.modifiers:
+                if mod.type == 'NODES' and mod.node_group is not None:
+                    mods[mod.name] = mod.node_group.name
+            if mods:
+                modifier_links[obj.name] = mods
+
+        data = {
+            'version': 1,
+            'material_slots': material_slots,
+            'modifier_links': modifier_links,
+        }
+        self.ensure_nodes_dir()
+        new_content = json.dumps(data, indent=2, sort_keys=True)
+
+        if os.path.isfile(self.assignments_path):
+            with open(self.assignments_path, 'r', encoding='utf-8') as f:
+                if f.read() == new_content:
+                    return self.assignments_path
+
+        with open(self.assignments_path, 'w', encoding='utf-8') as f:
+            f.write(new_content)
+        return self.assignments_path
+
+    def apply_scene_assignments(self) -> tuple[int, int]:
+        """Read nodes/_scene_assignments.json and re-attach materials and
+        GN modifier node groups to objects whose slots/modifiers are empty.
+
+        Never overwrites an existing assignment — only fills in slots that
+        are currently None or modifiers whose node_group is None.
+
+        Returns (slots_relinked, modifiers_relinked).
+        """
+        import bpy
+        if not os.path.isfile(self.assignments_path):
+            return (0, 0)
+        try:
+            with open(self.assignments_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:
+            print(f"[NodeSync] Could not read scene assignments: {e}")
+            return (0, 0)
+
+        slots_relinked = 0
+        modifiers_relinked = 0
+
+        for obj_name, slot_names in data.get('material_slots', {}).items():
+            obj = bpy.data.objects.get(obj_name)
+            if obj is None:
+                continue
+            for i, mat_name in enumerate(slot_names):
+                if mat_name is None or i >= len(obj.material_slots):
+                    continue
+                if obj.material_slots[i].material is not None:
+                    continue
+                mat = bpy.data.materials.get(mat_name)
+                if mat is not None:
+                    obj.material_slots[i].material = mat
+                    slots_relinked += 1
+
+        for obj_name, mods in data.get('modifier_links', {}).items():
+            obj = bpy.data.objects.get(obj_name)
+            if obj is None:
+                continue
+            for mod_name, group_name in mods.items():
+                mod = obj.modifiers.get(mod_name)
+                if mod is None or mod.type != 'NODES':
+                    continue
+                if mod.node_group is not None:
+                    continue
+                ng = bpy.data.node_groups.get(group_name)
+                if ng is not None:
+                    mod.node_group = ng
+                    modifiers_relinked += 1
+
+        return (slots_relinked, modifiers_relinked)
 
     def import_all_from_disk(self) -> list:
         """
@@ -250,7 +354,7 @@ class NodeSyncProject:
         # Standalone node groups first (geometry + shader)
         group_paths = []
         for f in os.listdir(self.nodes_dir):
-            if f.endswith('.json'):
+            if f.endswith('.json') and f != ASSIGNMENTS_FILENAME:
                 group_paths.append(os.path.join(self.nodes_dir, f))
         if os.path.isdir(self.shader_dir):
             for f in os.listdir(self.shader_dir):

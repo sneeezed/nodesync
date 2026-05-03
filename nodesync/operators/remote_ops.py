@@ -11,8 +11,8 @@ from .helpers import (
     _refresh_branches,
     _refresh_history,
     _pending_pull_changes,
+    _remove_node_data,
 )
-from .modifier_links import _snapshot_modifier_links, _restore_modifier_links
 
 
 class NODESYNC_OT_clone_from_github(bpy.types.Operator):
@@ -107,6 +107,7 @@ class NODESYNC_OT_clone_from_github(bpy.types.Operator):
 
         # Import all node groups from the cloned nodes/ directory
         imported = proj.import_all_from_disk()
+        proj.apply_scene_assignments()
 
         _refresh_branches(scene, target_dir)
         _refresh_history(scene, target_dir)
@@ -206,8 +207,11 @@ class NODESYNC_OT_confirm_pull_changes(bpy.types.Operator):
         if data['deletes']:
             layout.label(text="Node groups removed in pull:", icon='TRASH')
             col = layout.column(align=True)
-            for name in data['deletes']:
-                col.label(text=f"    {name}")
+            for rel_path in data['deletes']:
+                display = os.path.basename(rel_path)
+                if display.endswith('.json'):
+                    display = display[:-5]
+                col.label(text=f"    {display}")
             layout.separator(factor=0.5)
 
         layout.label(text="Click OK to apply, or Cancel to skip.")
@@ -216,26 +220,28 @@ class NODESYNC_OT_confirm_pull_changes(bpy.types.Operator):
         data = _pending_pull_changes
         proj_root = data['project_root']
 
-        if data['creates'] and proj_root:
+        proj = None
+        if proj_root:
             from ..project import NodeSyncProject
             proj = NodeSyncProject(proj_root)
+
+        if data['creates'] and proj is not None:
             paths = [p for _, p in data['creates']]
             imported = proj.import_specific_from_disk(paths)
-            _restore_modifier_links(imported)
             if imported:
                 self.report({'INFO'}, f"Imported: {', '.join(imported)}")
 
         if data['deletes']:
-            # Snapshot before deletion so we can re-link if these groups return
-            _snapshot_modifier_links()
             removed = []
-            for name in data['deletes']:
-                ng = bpy.data.node_groups.get(name)
-                if ng:
-                    bpy.data.node_groups.remove(ng)
+            for rel_path in data['deletes']:
+                name = _remove_node_data(rel_path)
+                if name:
                     removed.append(name)
             if removed:
                 self.report({'INFO'}, f"Removed: {', '.join(removed)}")
+
+        if proj is not None:
+            proj.apply_scene_assignments()
 
         data['creates'].clear()
         data['deletes'].clear()
@@ -405,9 +411,6 @@ class NODESYNC_OT_select_pull_groups(bpy.types.Operator):
             self.report({'INFO'}, "Nothing selected — pull cancelled")
             return {'CANCELLED'}
 
-        # Snapshot modifier assignments before we touch anything
-        _snapshot_modifier_links()
-
         from ..git_ops import GitRepo, GitError
         try:
             repo   = GitRepo(proj.root)
@@ -448,22 +451,22 @@ class NODESYNC_OT_select_pull_groups(bpy.types.Operator):
         # Apply selected changes to Blender state
         modified_paths = [c.rel_path for c in selected if c.status == 'modified']
         added_paths    = [c.rel_path for c in selected if c.status == 'added']
-        deleted_names  = [c.group_name for c in selected if c.status == 'deleted']
 
         reimported = []
         if modified_paths:
             reimported += proj.import_specific_from_disk(modified_paths)
         if added_paths:
             reimported += proj.import_specific_from_disk(added_paths)
-        _restore_modifier_links(reimported)
 
-        # Remove Blender groups whose files were dropped in this pull
+        # Remove Blender data-blocks whose files were dropped in this pull
+        deleted_candidates = [c for c in selected if c.status == 'deleted']
         removed = []
-        for name in deleted_names:
-            ng = bpy.data.node_groups.get(name)
-            if ng:
-                bpy.data.node_groups.remove(ng)
+        for c in deleted_candidates:
+            name = _remove_node_data(c.rel_path)
+            if name:
                 removed.append(name)
+
+        proj.apply_scene_assignments()
 
         _refresh_branches(scene, proj.root)
         _refresh_history(scene, proj.root)

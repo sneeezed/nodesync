@@ -5,7 +5,6 @@ Operators for creating and switching git branches.
 import bpy
 
 from .helpers import _get_project, _refresh_branches, _refresh_history
-from .modifier_links import _snapshot_modifier_links, _restore_modifier_links
 
 
 class NODESYNC_OT_create_branch(bpy.types.Operator):
@@ -80,9 +79,8 @@ class NODESYNC_OT_switch_branch(bpy.types.Operator):
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
 
-        _snapshot_modifier_links()
         imported = proj.import_all_from_disk()
-        _restore_modifier_links(imported)
+        proj.apply_scene_assignments()
         _refresh_branches(scene, proj.root)
         _refresh_history(scene, proj.root)
         self.report({'INFO'},

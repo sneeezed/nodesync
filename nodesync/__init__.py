@@ -5,7 +5,7 @@ NodeSync — Git-backed version control for Blender Geometry Node trees.
 bl_info = {
     'name':        'NodeSync',
     'author':      'NodeSync',
-    'version':     (1, 0, 5),
+    'version':     (1, 0, 8),
     'blender':     (4, 0, 0),
     'location':    'Geometry / Shader Node Editor > N-Panel > NodeSync',
     'description': 'Git-backed version control for Geometry and Shader Node trees',
@@ -83,7 +83,7 @@ if 'props' in dir():
         remote as git_remote, branches as git_branches, conflicts as git_conflicts,
     )
     from .operators import (
-        modifier_links, helpers,
+        helpers,
         project_ops, commit_ops, diff_ops, remote_ops, branch_ops, conflict_ops,
     )
     importlib.reload(utils)
@@ -104,7 +104,6 @@ if 'props' in dir():
     importlib.reload(diff)
     importlib.reload(props)
     # Reload operator sub-modules in dependency order before the package init
-    importlib.reload(modifier_links)
     importlib.reload(helpers)
     importlib.reload(project_ops)
     importlib.reload(commit_ops)

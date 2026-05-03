@@ -2,7 +2,6 @@
 NodeSync operators package.
 
 Sub-modules:
-  modifier_links  — session-scoped modifier link snapshot/restore helpers
   helpers         — shared accessors, branch colours, history/branch refresh
   project_ops     — init_project, open_project
   commit_ops      — commit, refresh_history, checkout_commit, toggle_history_filter

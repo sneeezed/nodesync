@@ -96,7 +96,8 @@ NodeSync automatically exports every shader tree when you commit or save your `.
 
 ```
 nodes/
-  MyGeometryGroup.json          ← standalone geometry node groups
+  _scene_assignments.json        ← which objects use which materials / GN groups
+  MyGeometryGroup.json           ← standalone geometry node groups
   shader/
     MyShaderGroup.json           ← standalone shader node groups
     materials/
@@ -109,6 +110,30 @@ nodes/
 textures/
   rock_diffuse.png               ← copied by "Track Shader Textures"
 ```
+
+### Scene Assignments File
+
+Alongside the per-tree JSONs, NodeSync writes a single `nodes/_scene_assignments.json` on every commit and `.blend` save. It records two things:
+
+- **material_slots** — for each object, which material name occupies each of its material slots
+- **modifier_links** — for each object, which Geometry Nodes node group each `NODES`-type modifier points at
+
+```json
+{
+  "version": 1,
+  "material_slots": {
+    "Cube":     ["Stone", null, "Metal"],
+    "Sphere":   ["Stone"]
+  },
+  "modifier_links": {
+    "Plane":    { "GeometryNodes": "MyGeometryGroup" }
+  }
+}
+```
+
+This file is **read on every revert, branch switch, pull, and clone**. After NodeSync re-imports the node trees, it walks this map and re-attaches materials and GN modifier groups to any object slot that's currently empty. It never overwrites an existing assignment, so reassigning a slot manually after revert is safe — the next pull won't undo it.
+
+Because this lives in git and not in memory, slot assignments survive across Blender sessions, machines, and clones — anyone who checks out the commit gets the same scene wiring.
 
 ### Image Texture Tracking
 
@@ -172,7 +197,9 @@ Each node tree is serialized to a JSON file containing:
 - All links between nodes
 - For embedded material/world/light trees: `owner_type` and `owner_name` tags so the deserializer knows which Blender data-block to attach to
 
-On checkout or pull, NodeSync reconstructs every node tree from JSON in dependency order (nested groups first). Socket matching uses Blender's internal socket identifiers for stability, keeping git history clean even when sockets are reordered.
+In addition, `nodes/_scene_assignments.json` records which objects use which materials (per slot) and which GN modifiers point at which node groups, so scene wiring is restored automatically on revert / branch-switch / pull / clone.
+
+On checkout or pull, NodeSync reconstructs every node tree from JSON in dependency order (nested groups first), then applies the scene-assignments map to re-attach materials and modifier groups to any empty slot. Socket matching uses Blender's internal socket identifiers for stability, keeping git history clean even when sockets are reordered.
 
 Git operations run via subprocess. No external Python dependencies required — only the standard library and Blender's `bpy`.
 

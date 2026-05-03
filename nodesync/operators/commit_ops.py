@@ -14,8 +14,8 @@ from .helpers import (
     _pending_pull_changes,
     _resolve_tree_rel_path,
     _branch_color_for_name,
+    _remove_node_data,
 )
-from .modifier_links import _snapshot_modifier_links, _restore_modifier_links
 
 
 class NODESYNC_OT_commit(bpy.types.Operator):
@@ -284,8 +284,6 @@ class NODESYNC_OT_checkout_commit(bpy.types.Operator):
             self.report({'ERROR'}, "No active NodeSync project")
             return {'CANCELLED'}
 
-        _snapshot_modifier_links()
-
         from ..git_ops import GitRepo, GitNotFoundError, GitError
         try:
             repo = GitRepo(proj.root)
@@ -307,25 +305,22 @@ class NODESYNC_OT_checkout_commit(bpy.types.Operator):
                 print(f"[NodeSync] Could not remove '{rel_path}': {e}")
 
         imported = proj.import_all_from_disk()
-        _restore_modifier_links(imported)
+        proj.apply_scene_assignments()
 
         scene.nodesync_restore_hash = self.commit_hash
 
         _refresh_history(scene, proj.root)
 
-        to_delete_names = [
-            os.path.basename(p)[:-5] if p.endswith('.json') else os.path.basename(p)
-            for p in diff['added']
-        ]
+        to_delete_paths = list(diff['added'])  # keep rel_paths so we know the collection
 
-        if not to_delete_names:
+        if not to_delete_paths:
             self.report({'INFO'},
                         f"Restored nodes from {self.commit_hash[:8]} — "
                         f"{len(imported)} group(s) loaded. Commit to save this state.")
             return {'FINISHED'}
 
         _pending_pull_changes['creates'] = []
-        _pending_pull_changes['deletes'] = to_delete_names
+        _pending_pull_changes['deletes'] = to_delete_paths
         _pending_pull_changes['project_root'] = proj.root
 
         bpy.ops.nodesync.confirm_pull_changes('INVOKE_DEFAULT')

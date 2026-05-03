@@ -6,7 +6,6 @@ import bpy
 import os
 
 from .helpers import _get_project, _refresh_branches, _refresh_history
-from .modifier_links import _snapshot_modifier_links, _restore_modifier_links
 
 
 class NODESYNC_OT_resolve_conflict(bpy.types.Operator):
@@ -82,9 +81,8 @@ class NODESYNC_OT_complete_merge(bpy.types.Operator):
             return {'CANCELLED'}
 
         # Reload all node groups from the merged state
-        _snapshot_modifier_links()
         imported = proj.import_all_from_disk()
-        _restore_modifier_links(imported)
+        proj.apply_scene_assignments()
         scene.nodesync_conflict_items.clear()
         scene.nodesync_has_conflicts  = False
         scene.nodesync_sync_status    = 'Merge complete'
@@ -122,9 +120,8 @@ class NODESYNC_OT_abort_merge(bpy.types.Operator):
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
 
-        _snapshot_modifier_links()
         imported = proj.import_all_from_disk()
-        _restore_modifier_links(imported)
+        proj.apply_scene_assignments()
         scene.nodesync_conflict_items.clear()
         scene.nodesync_has_conflicts  = False
         scene.nodesync_sync_status    = 'Merge aborted'

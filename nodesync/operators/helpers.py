@@ -200,6 +200,66 @@ def _refresh_branches(scene, root):
 
 
 # ---------------------------------------------------------------------------
+# Node data removal helpers
+# ---------------------------------------------------------------------------
+
+def _deselect_tree_in_editors(tree) -> None:
+    """Clear any node editor that is currently showing *tree*."""
+    import bpy
+    if tree is None:
+        return
+    for screen in bpy.data.screens:
+        for area in screen.areas:
+            if area.type != 'NODE_EDITOR':
+                continue
+            for space in area.spaces:
+                if space.type != 'NODE_EDITOR':
+                    continue
+                try:
+                    if space.node_tree is tree:
+                        space.node_tree = None
+                except Exception:
+                    pass
+
+
+def _collection_for_path(rel_path: str):
+    """Return the bpy.data collection that owns the data-block for *rel_path*."""
+    import bpy
+    if rel_path.startswith('nodes/shader/materials/'):
+        return bpy.data.materials
+    if rel_path.startswith('nodes/shader/worlds/'):
+        return bpy.data.worlds
+    if rel_path.startswith('nodes/shader/lights/'):
+        return bpy.data.lights
+    return bpy.data.node_groups
+
+
+def _remove_node_data(rel_path: str) -> str | None:
+    """Remove the Blender data-block that corresponds to a repo-relative path.
+
+    Routes to the correct bpy.data collection (materials / worlds / lights /
+    node_groups) based on the path prefix, deselects the tree from any open
+    node editor first, then removes the item.  Returns the removed name, or
+    None if the item was not found.
+    """
+    import bpy
+    import os
+    name = os.path.basename(rel_path)
+    if name.endswith('.json'):
+        name = name[:-5]
+
+    collection = _collection_for_path(rel_path)
+    item = collection.get(name)
+    if item is None:
+        return None
+
+    tree = item if collection is bpy.data.node_groups else getattr(item, 'node_tree', None)
+    _deselect_tree_in_editors(tree)
+    collection.remove(item)
+    return name
+
+
+# ---------------------------------------------------------------------------
 # Shared mutable state for the pull confirmation dialog
 # ---------------------------------------------------------------------------
 
