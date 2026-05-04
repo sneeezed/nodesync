@@ -25,13 +25,54 @@ def _get_repo(root):
     return GitRepo(root)
 
 
+def _get_addon_prefs(context):
+    """Return the NodeSync addon preferences object, or None.
+
+    Robust against the addon being installed either as a legacy add-on
+    ('nodesync') or as a Blender 4.2+ extension
+    ('bl_ext.user_default.nodesync', etc.) — split('.')[0] guesses wrong in
+    the extension case ('bl_ext'), which silently disables prefs-driven
+    behavior like auto-push.  rsplit strips just the trailing submodule
+    name, leaving the addon's actual registration key.
+    """
+    addon_key = __package__.rsplit('.', 1)[0]
+    addon = context.preferences.addons.get(addon_key)
+    if addon is None:
+        return None
+    return addon.preferences
+
+
 def _get_token(context):
     """Return the GitHub PAT from addon preferences, or empty string."""
+    prefs = _get_addon_prefs(context)
+    if prefs is None:
+        return ''
     try:
-        prefs = context.preferences.addons[__package__.split('.')[0]].preferences
         return prefs.github_token.strip()
     except Exception:
         return ''
+
+
+def _clear_sync_status_if(scene_ptr, expected: str):
+    """Timer callback: clear nodesync_sync_status iff it still equals
+    *expected* (so a newer status message isn't overwritten).  Returns None
+    so Blender unregisters the timer after one shot.
+    """
+    import bpy
+    scene = bpy.context.scene
+    if scene is not None and scene.nodesync_sync_status == expected:
+        scene.nodesync_sync_status = ''
+    return None
+
+
+def _schedule_sync_status_clear(scene, expected: str, delay: float = 10.0):
+    """Schedule the sync-status indicator to clear after *delay* seconds,
+    but only if the status hasn't been changed in the meantime."""
+    import bpy
+    bpy.app.timers.register(
+        lambda: _clear_sync_status_if(None, expected),
+        first_interval=delay,
+    )
 
 
 # ---------------------------------------------------------------------------

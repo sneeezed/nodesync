@@ -9,6 +9,7 @@ import threading
 from .helpers import (
     _get_project,
     _get_token,
+    _get_addon_prefs,
     _refresh_branches,
     _refresh_history,
     _pending_pull_changes,
@@ -16,6 +17,7 @@ from .helpers import (
     _branch_color_for_name,
     _compute_branch_ownership,
     _remove_node_data,
+    _schedule_sync_status_clear,
 )
 
 
@@ -51,12 +53,12 @@ class NODESYNC_OT_commit(bpy.types.Operator):
             return {'CANCELLED'}
 
         # Read preferences on main thread before spawning the worker thread
-        try:
-            prefs = context.preferences.addons[__package__.split('.')[0]].preferences
-            track_textures = prefs.track_textures
-            do_screenshot  = prefs.screenshot_on_commit
-            auto_push      = prefs.auto_push_on_commit
-        except Exception:
+        prefs = _get_addon_prefs(context)
+        if prefs is not None:
+            track_textures = bool(getattr(prefs, 'track_textures', False))
+            do_screenshot  = bool(getattr(prefs, 'screenshot_on_commit', False))
+            auto_push      = bool(getattr(prefs, 'auto_push_on_commit', False))
+        else:
             track_textures = False
             do_screenshot  = False
             auto_push      = False
@@ -179,6 +181,7 @@ class NODESYNC_OT_commit(bpy.types.Operator):
 
         if result.get('pushed'):
             scene.nodesync_sync_status = 'Pushed OK'
+            _schedule_sync_status_clear(scene, 'Pushed OK')
             self.report({'INFO'}, f"Auto-pushed branch '{result['push_branch']}' to origin")
         elif result.get('push_error'):
             scene.nodesync_sync_status = 'Auto-push failed'

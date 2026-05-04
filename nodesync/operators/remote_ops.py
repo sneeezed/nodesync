@@ -8,10 +8,12 @@ import os
 from .helpers import (
     _get_project,
     _get_token,
+    _get_addon_prefs,
     _refresh_branches,
     _refresh_history,
     _pending_pull_changes,
     _remove_node_data,
+    _schedule_sync_status_clear,
 )
 
 
@@ -40,12 +42,8 @@ class NODESYNC_OT_clone_from_github(bpy.types.Operator):
         layout.separator()
         if not scene.nodesync_clone_url.strip():
             layout.label(text='Enter a GitHub URL above', icon='INFO')
-        token_set = False
-        try:
-            prefs = context.preferences.addons[__package__.split('.')[0]].preferences
-            token_set = bool(prefs.github_token.strip())
-        except Exception:
-            pass
+        prefs = _get_addon_prefs(context)
+        token_set = bool(prefs and getattr(prefs, 'github_token', '').strip())
         if not token_set:
             layout.label(text='No token set — only public repos will work', icon='ERROR')
 
@@ -176,6 +174,7 @@ class NODESYNC_OT_push(bpy.types.Operator):
             repo = GitRepo(proj.root)
             repo.push(token=token)
             scene.nodesync_sync_status = 'Pushed OK'
+            _schedule_sync_status_clear(scene, 'Pushed OK')
             branch = repo.current_branch()
             self.report({'INFO'}, f"Pushed branch '{branch}' to origin")
         except GitError as e:
@@ -472,6 +471,12 @@ class NODESYNC_OT_select_pull_groups(bpy.types.Operator):
                 removed.append(name)
 
         proj.apply_scene_assignments()
+
+        # After a successful pull the user is by definition at the new HEAD,
+        # not at a previously-checked-out commit, so clear the restore hash
+        # so the history bookmark advances with HEAD instead of staying on
+        # the old commit.
+        scene.nodesync_restore_hash = ''
 
         _refresh_branches(scene, proj.root)
         _refresh_history(scene, proj.root)
