@@ -279,6 +279,24 @@ def reconstruct_node_group(data: dict, project_root: str | None = None):
     else:
         ng = bpy.data.node_groups.new(name, tree_type)
 
+    # Without a fake user, a freshly-reconstructed group has zero users and
+    # the data-block lingers as an orphan that blocks rename attempts.
+    # apply_scene_assignments() may attach it to a modifier later, but until
+    # then a fake user keeps it visible and persistent.
+    ng.use_fake_user = True
+
+    # The Geometry Nodes modifier dropdown only lists trees with
+    # is_modifier == True, and the Tool panel only lists is_tool == True.
+    # bpy.data.node_groups.new() leaves both False, so a reconstructed group
+    # is invisible in those UIs even though the data-block exists. Honor the
+    # serialized flags when present; default is_modifier to True for legacy
+    # JSON written before these fields were captured, so older repos still
+    # show their groups in the modifier picker.
+    if hasattr(ng, 'is_modifier'):
+        ng.is_modifier = bool(data.get('is_modifier', True))
+    if hasattr(ng, 'is_tool'):
+        ng.is_tool = bool(data.get('is_tool', False))
+
     # 1. Rebuild interface sockets
     _restore_interface(ng, data.get('interface', []))
 

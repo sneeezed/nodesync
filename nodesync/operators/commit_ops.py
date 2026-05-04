@@ -14,6 +14,7 @@ from .helpers import (
     _pending_pull_changes,
     _resolve_tree_rel_path,
     _branch_color_for_name,
+    _compute_branch_ownership,
     _remove_node_data,
 )
 
@@ -105,10 +106,12 @@ class NODESYNC_OT_commit(bpy.types.Operator):
                         head_full      = repo.current_commit_hash(short=False)
                         current_branch = repo.current_branch()
                         branches       = repo.list_branches()
+                        branch_reach   = {b: repo.rev_list(b) for b in branches}
                         result['history_entries'] = entries
                         result['history_head']    = head_full
                         result['current_branch']  = current_branch
                         result['branches']        = branches
+                        result['branch_reach']    = branch_reach
                     except Exception:
                         pass  # modal will fall back to synchronous refresh
 
@@ -205,16 +208,16 @@ class NODESYNC_OT_commit(bpy.types.Operator):
         entries        = result.get('history_entries', [])
         head_full      = result.get('history_head', '')
         current_branch = result.get('current_branch', '')
+        branch_reach   = result.get('branch_reach', {})
 
         scene.nodesync_head_hash = head_full
-        active_branch = current_branch
+
+        ownership = _compute_branch_ownership(entries, branch_reach, current_branch)
 
         scene.nodesync_commit_history.clear()
         for e in entries:
-            decs       = e.get('decorations', [])
-            local_decs = [d for d in decs if not d.startswith('origin/')]
-            if local_decs:
-                active_branch = local_decs[0]
+            decs  = e.get('decorations', [])
+            owner = ownership.get(e['full_hash'], current_branch)
 
             item             = scene.nodesync_commit_history.add()
             item.full_hash   = e['full_hash']
@@ -223,8 +226,8 @@ class NODESYNC_OT_commit(bpy.types.Operator):
             item.author      = e['author']
             item.date        = e['date']
             item.decorations = ','.join(decs)
-            idx, color       = _branch_color_for_name(active_branch)
-            item.branch_name = active_branch
+            idx, color       = _branch_color_for_name(owner)
+            item.branch_name = owner
             item.color_index = idx
             item.branch_color = color
 

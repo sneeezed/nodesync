@@ -227,7 +227,7 @@ class NODESYNC_OT_confirm_pull_changes(bpy.types.Operator):
 
         if data['creates'] and proj is not None:
             paths = [p for _, p in data['creates']]
-            imported = proj.import_specific_from_disk(paths)
+            imported = proj.import_specific_from_disk(paths, report=self.report)
             if imported:
                 self.report({'INFO'}, f"Imported: {', '.join(imported)}")
 
@@ -306,9 +306,14 @@ class NODESYNC_OT_pull(bpy.types.Operator):
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
 
-        modified = diff['modified']
-        added    = diff['added']
-        deleted  = diff['deleted']
+        # _scene_assignments.json is bookkeeping, not a node group — never
+        # show it in the candidate dialog or feed it into import_specific_from_disk.
+        def _is_group_path(p):
+            return os.path.basename(p) != '_scene_assignments.json'
+
+        modified = [p for p in diff['modified'] if _is_group_path(p)]
+        added    = [p for p in diff['added']    if _is_group_path(p)]
+        deleted  = [p for p in diff['deleted']  if _is_group_path(p)]
 
         if not (modified or added or deleted):
             scene.nodesync_sync_status = 'Already up to date'
@@ -454,9 +459,9 @@ class NODESYNC_OT_select_pull_groups(bpy.types.Operator):
 
         reimported = []
         if modified_paths:
-            reimported += proj.import_specific_from_disk(modified_paths)
+            reimported += proj.import_specific_from_disk(modified_paths, report=self.report)
         if added_paths:
-            reimported += proj.import_specific_from_disk(added_paths)
+            reimported += proj.import_specific_from_disk(added_paths, report=self.report)
 
         # Remove Blender data-blocks whose files were dropped in this pull
         deleted_candidates = [c for c in selected if c.status == 'deleted']

@@ -133,6 +133,40 @@ def _branch_color_for_name(branch_name: str) -> tuple:
 # History / branch refresh
 # ---------------------------------------------------------------------------
 
+def _compute_branch_ownership(entries, branch_reach: dict, current_branch: str) -> dict:
+    """Assign each commit in *entries* to a single branch for coloring.
+
+    GitHub-style lanes: the default branch (main/master) owns every commit
+    it can reach — shared ancestors all get the default color. A commit
+    that the default branch cannot reach is owned by the most-specific
+    other branch that reaches it (smallest reach set wins; current branch
+    breaks ties; then alphabetical).
+
+    *branch_reach* maps branch name → set of full commit hashes reachable
+    from that branch tip.
+    """
+    default = 'main' if 'main' in branch_reach else ('master' if 'master' in branch_reach else None)
+
+    others = [b for b in branch_reach if b != default]
+    others.sort(key=lambda b: (len(branch_reach[b]), 0 if b == current_branch else 1, b))
+
+    default_reach = branch_reach.get(default, set()) if default else set()
+
+    ownership = {}
+    for e in entries:
+        h = e['full_hash']
+        if default and h in default_reach:
+            ownership[h] = default
+            continue
+        for b in others:
+            if h in branch_reach[b]:
+                ownership[h] = b
+                break
+        else:
+            ownership[h] = current_branch or (default or '')
+    return ownership
+
+
 def _refresh_history(scene, root, filter_hashes=None):
     """Populate scene.nodesync_commit_history from git log.
 
@@ -145,26 +179,25 @@ def _refresh_history(scene, root, filter_hashes=None):
         entries = repo.log(300)
         head_full = repo.current_commit_hash(short=False)
         current_branch = repo.current_branch()
+        branches = repo.list_branches()
+        branch_reach = {b: repo.rev_list(b) for b in branches}
     except Exception:
         entries = []
         head_full = ''
         current_branch = ''
+        branch_reach = {}
 
     scene.nodesync_head_hash = head_full
 
-    # Walk newest→oldest, propagating the active branch name from decoration tags
-    active_branch = current_branch
+    ownership = _compute_branch_ownership(entries, branch_reach, current_branch)
 
     scene.nodesync_commit_history.clear()
     for e in entries:
-        # If this commit is a branch tip, update the active branch name
-        decs = e.get('decorations', [])
-        local_decs = [d for d in decs if not d.startswith('origin/')]
-        if local_decs:
-            active_branch = local_decs[0]
-
         if filter_hashes is not None and e['full_hash'] not in filter_hashes:
             continue
+
+        decs = e.get('decorations', [])
+        owner = ownership.get(e['full_hash'], current_branch)
 
         item = scene.nodesync_commit_history.add()
         item.full_hash   = e['full_hash']
@@ -173,8 +206,8 @@ def _refresh_history(scene, root, filter_hashes=None):
         item.author      = e['author']
         item.date        = e['date']
         item.decorations = ','.join(decs)
-        idx, color        = _branch_color_for_name(active_branch)
-        item.branch_name  = active_branch
+        idx, color        = _branch_color_for_name(owner)
+        item.branch_name  = owner
         item.color_index  = idx
         item.branch_color = color
 

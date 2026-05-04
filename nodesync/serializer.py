@@ -174,7 +174,7 @@ def export_node_group(node_group) -> dict:
             'to_socket_name':        link.to_socket.name,
         })
 
-    return {
+    out = {
         'schema_version': '1.0',
         'name':           node_group.name,
         'type':           node_group.bl_idname,
@@ -182,6 +182,13 @@ def export_node_group(node_group) -> dict:
         'nodes':          nodes_data,
         'links':          links_data,
     }
+    # GeometryNodeTree-only flags that control which UI surfaces list the
+    # group (modifier dropdown, tool shelf).  Only present on geometry trees.
+    if hasattr(node_group, 'is_modifier'):
+        out['is_modifier'] = bool(node_group.is_modifier)
+    if hasattr(node_group, 'is_tool'):
+        out['is_tool'] = bool(node_group.is_tool)
+    return out
 
 
 def collect_all_groups(root_name: str) -> list:

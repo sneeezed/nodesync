@@ -139,6 +139,25 @@ class RemoteMixin:
         )
         return r.stdout.strip()
 
+    def discard_assignments_worktree_changes(self) -> bool:
+        """
+        Reset any uncommitted worktree changes to nodes/_scene_assignments.json.
+        That file is auto-regenerated on every save/commit, so a dirty copy is
+        safe to discard before a merge/checkout.  Returns True if the file was
+        reset, False if it was clean or untracked.
+        """
+        path = 'nodes/_scene_assignments.json'
+        status = self._run('status', '--porcelain', '--', path, check=False)
+        if status.returncode != 0 or not status.stdout.strip():
+            return False
+        # Only reset if the file is tracked-and-modified (status starts with ' M' or 'M ').
+        # Untracked files (status '??') are left alone.
+        code = status.stdout[:2]
+        if '?' in code:
+            return False
+        self._run('checkout', 'HEAD', '--', path, check=False)
+        return True
+
     def selective_pull(self, branch: str, selected_paths: list,
                        unselected_paths: list, message: str) -> tuple[bool, list]:
         """
@@ -152,6 +171,12 @@ class RemoteMixin:
         """
         if not branch:
             raise GitError("selective_pull: branch is required")
+
+        # _scene_assignments.json is auto-regenerated on every save, so its
+        # worktree state can drift from HEAD without the user committing.
+        # Discard those local edits so the merge isn't blocked; the post-merge
+        # apply_scene_assignments() + next save will rebuild it correctly.
+        self.discard_assignments_worktree_changes()
 
         ref = f'origin/{branch}'
 

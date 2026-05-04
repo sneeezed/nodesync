@@ -38,6 +38,15 @@ class HistoryMixin:
                 })
         return entries
 
+    def rev_list(self, ref: str, n: int = 1000) -> set:
+        """Return the set of full commit hashes reachable from *ref* (a branch
+        name, tag, or commit). Used to compute per-branch ownership of commits
+        for multi-lane history coloring."""
+        r = self._run('rev-list', f'--max-count={n}', ref, check=False)
+        if r.returncode != 0 or not r.stdout.strip():
+            return set()
+        return set(r.stdout.strip().splitlines())
+
     def log_for_file(self, filepath: str, n: int = 300) -> set:
         """Return a set of full commit hashes that touched *filepath*.
 

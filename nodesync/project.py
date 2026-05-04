@@ -391,19 +391,25 @@ class NodeSyncProject:
 
         return imported
 
-    def import_specific_from_disk(self, repo_relative_paths: list) -> list:
+    def import_specific_from_disk(self, repo_relative_paths: list, report=None) -> list:
         """
         Reconstruct only the trees whose JSON files are listed in
         repo_relative_paths (e.g. ['nodes/Foo.json',
         'nodes/shader/materials/Stone.json']).  Routes embedded shader
         trees to the embedded reconstructor based on `owner_type` in the JSON.
         Returns list of successfully imported names.
+
+        If `report` is provided (typically an operator's `self.report`), any
+        per-file failures are surfaced to the Blender info bar in addition to
+        being printed to the system console.
         """
         from .deserializer import reconstruct_node_group, reconstruct_embedded_shader
         imported = []
         for rel_path in repo_relative_paths:
             abs_path = os.path.join(self.root, rel_path)
             if not os.path.isfile(abs_path):
+                if report is not None:
+                    report({'ERROR'}, f"NodeSync: missing file '{rel_path}' — group not imported")
                 continue
             try:
                 with open(abs_path, 'r', encoding='utf-8') as f:
@@ -412,12 +418,22 @@ class NodeSyncProject:
                     owner = reconstruct_embedded_shader(data, self.root)
                     if owner is not None:
                         imported.append(owner.name)
+                    elif report is not None:
+                        report({'ERROR'},
+                               f"NodeSync: could not attach embedded shader from '{rel_path}' "
+                               f"— owner material/world/light may not exist locally")
                 else:
                     ng = reconstruct_node_group(data, self.root)
                     if ng:
                         imported.append(ng.name)
+                    elif report is not None:
+                        report({'ERROR'},
+                               f"NodeSync: failed to build node group from '{rel_path}'")
             except Exception as e:
+                msg = f"NodeSync: failed to import '{rel_path}': {e}"
                 print(f"[NodeSync] Failed to import '{rel_path}': {e}")
+                if report is not None:
+                    report({'ERROR'}, msg)
         return imported
 
     def load_group_data_from_disk(self, repo_relative_paths: list) -> list:
