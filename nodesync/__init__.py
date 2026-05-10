@@ -25,7 +25,7 @@ _previews = None
 # ---------------------------------------------------------------------------
 
 class NodeSyncPreferences(bpy.types.AddonPreferences):
-    bl_idname = __name__
+    bl_idname = __package__
 
     github_token: bpy.props.StringProperty(
         name        = 'GitHub Personal Access Token',
