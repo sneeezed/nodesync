@@ -163,14 +163,15 @@ class NODE_PT_nodesync_project(bpy.types.Panel):
                 layout.label(text='Folder not found', icon='ERROR')
             col = layout.column(align=True)
             col.scale_y = 1.2
-            col.operator('nodesync.clone_from_github', icon='IMPORT')
+            col.operator('nodesync.clone_from_url', icon='IMPORT')
             col.operator('nodesync.init_project', text='Init New Project', icon='NEWFOLDER')
         else:
-            # Project is loaded — show GitHub / remote section
+            # Project is loaded — show Git remote section
             layout.separator()
-            layout.label(text='GitHub', icon='URL')
+            layout.label(text='Git Remote', icon='URL')
             row = layout.row(align=True)
-            row.prop(scene, 'nodesync_remote_url', text='', placeholder='https://github.com/user/repo')
+            row.prop(scene, 'nodesync_remote_url', text='',
+                     placeholder='https://example.com/user/repo.git')
             row.operator('nodesync.set_remote', text='', icon='CHECKMARK')
 
             row = layout.row(align=True)

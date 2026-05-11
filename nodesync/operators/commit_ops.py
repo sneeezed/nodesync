@@ -8,7 +8,7 @@ import threading
 
 from .helpers import (
     _get_project,
-    _get_token,
+    _get_credentials,
     _get_addon_prefs,
     _refresh_branches,
     _refresh_history,
@@ -72,7 +72,10 @@ class NODESYNC_OT_commit(bpy.types.Operator):
             except Exception as e:
                 texture_warning = str(e)
 
-        token      = _get_token(context) if auto_push else ''
+        if auto_push:
+            username, token = _get_credentials(context)
+        else:
+            username, token = '', ''
         remote_url = scene.nodesync_remote_url.strip()
         proj_root  = proj.root
         n_exported = len(exported)
@@ -120,7 +123,7 @@ class NODESYNC_OT_commit(bpy.types.Operator):
                     if auto_push and remote_url:
                         try:
                             branch = repo.current_branch()
-                            repo.push(token=token)
+                            repo.push(token=token, username=username)
                             result['pushed']      = True
                             result['push_branch'] = branch
                         except GitError as e:

@@ -42,15 +42,26 @@ def _get_addon_prefs(context):
     return addon.preferences
 
 
-def _get_token(context):
-    """Return the GitHub PAT from addon preferences, or empty string."""
+def _get_credentials(context) -> tuple:
+    """Return ``(username, token)`` from addon preferences.
+
+    Either or both may be empty strings.  Empty token means no HTTPS
+    auth — the caller should rely on SSH or system credential helpers.
+    Empty username with a non-empty token is the GitHub / Azure DevOps
+    pattern; other hosts need both.
+    """
     prefs = _get_addon_prefs(context)
     if prefs is None:
-        return ''
+        return ('', '')
     try:
-        return prefs.github_token.strip()
+        username = getattr(prefs, 'remote_username', '').strip()
     except Exception:
-        return ''
+        username = ''
+    try:
+        token = getattr(prefs, 'remote_token', '').strip()
+    except Exception:
+        token = ''
+    return (username, token)
 
 
 def _clear_sync_status_if(scene_ptr, expected: str):
@@ -154,9 +165,9 @@ _BRANCH_PALETTE = [
 def _branch_color_for_name(branch_name: str) -> tuple:
     """Return a deterministic (palette_index, rgb) based solely on the branch name.
 
-    main/master always get index 7 (blue), matching GitHub's convention.
-    All other branches are hashed to a stable index that avoids blue so
-    they stay visually distinct from the default branch.
+    main/master always get index 7 (blue) to mark them as the default
+    branch.  All other branches are hashed to a stable index that avoids
+    blue so they stay visually distinct from the default branch.
     """
     if branch_name in ('main', 'master'):
         return 7, _BRANCH_PALETTE[7]
@@ -177,11 +188,11 @@ def _branch_color_for_name(branch_name: str) -> tuple:
 def _compute_branch_ownership(entries, branch_reach: dict, current_branch: str) -> dict:
     """Assign each commit in *entries* to a single branch for coloring.
 
-    GitHub-style lanes: the default branch (main/master) owns every commit
-    it can reach — shared ancestors all get the default color. A commit
-    that the default branch cannot reach is owned by the most-specific
-    other branch that reaches it (smallest reach set wins; current branch
-    breaks ties; then alphabetical).
+    Branch-lane coloring: the default branch (main/master) owns every
+    commit it can reach — shared ancestors all get the default color.  A
+    commit that the default branch cannot reach is owned by the
+    most-specific other branch that reaches it (smallest reach set wins;
+    current branch breaks ties; then alphabetical).
 
     *branch_reach* maps branch name → set of full commit hashes reachable
     from that branch tip.

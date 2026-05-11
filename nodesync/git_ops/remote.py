@@ -8,13 +8,29 @@ import shutil
 from .exceptions import GitError, GitNotFoundError
 
 
-def _inject_token(url: str, token: str) -> str:
-    """Embed a PAT into an HTTPS GitHub URL for authentication."""
+def _inject_token(url: str, token: str, username: str = '') -> str:
+    """Embed credentials into an HTTPS Git URL for authentication.
+
+    Builds ``https://USER:TOKEN@host/...`` when *username* is supplied,
+    otherwise falls back to ``https://TOKEN@host/...``.  The single-token
+    form works for GitHub and Azure DevOps; other hosts (GitLab, Codeberg,
+    Gitea, Bitbucket, self-hosted Forgejo, etc.) require a username — for
+    those services the user supplies a service-specific value such as
+    ``oauth2`` (GitLab), ``x-token-auth`` (Bitbucket), or their account
+    name (Codeberg / Gitea).
+
+    Non-HTTPS schemes (SSH, git://, file://) are returned unchanged so the
+    user's SSH agent or local credential helpers handle authentication.
+    Already-credentialled URLs are also returned untouched to avoid
+    double-injection.
+    """
     if not token or not url.startswith('https://'):
         return url
     # Avoid double-injection
     if '@' in url.split('//')[1].split('/')[0]:
         return url
+    if username:
+        return url.replace('https://', f'https://{username}:{token}@', 1)
     return url.replace('https://', f'https://{token}@', 1)
 
 
@@ -35,12 +51,13 @@ class RemoteMixin:
             self._run('remote', 'set-url', 'origin', url)
 
     @classmethod
-    def clone(cls, url: str, target_dir: str, token: str = '') -> 'RemoteMixin':
+    def clone(cls, url: str, target_dir: str, token: str = '',
+              username: str = '') -> 'RemoteMixin':
         """Clone a remote repo into target_dir. Returns a GitRepo for the result."""
         git = shutil.which('git')
         if git is None:
             raise GitNotFoundError("Git executable not found in PATH.")
-        clone_url = _inject_token(url, token)
+        clone_url = _inject_token(url, token, username)
         try:
             result = subprocess.run(
                 [git, 'clone', clone_url, target_dir],
@@ -55,13 +72,14 @@ class RemoteMixin:
             raise GitError(msg)
         return cls(target_dir)
 
-    def push(self, branch: str | None = None, token: str = '') -> str:
+    def push(self, branch: str | None = None, token: str = '',
+             username: str = '') -> str:
         """Push to origin. Returns stdout. Raises GitError on failure."""
         remote_url = self.get_remote_url()
         if not remote_url:
-            raise GitError("No remote URL configured. Set one in the GitHub panel first.")
+            raise GitError("No remote URL configured. Set one in the Git Remote panel first.")
 
-        push_url = _inject_token(remote_url, token)
+        push_url = _inject_token(remote_url, token, username)
 
         if branch is None:
             branch = self.current_branch()
@@ -75,7 +93,7 @@ class RemoteMixin:
             raise GitError(msg)
         return r.stdout.strip() or r.stderr.strip()
 
-    def pull(self, token: str = '') -> tuple[bool, list]:
+    def pull(self, token: str = '', username: str = '') -> tuple[bool, list]:
         """Pull from origin current branch.
 
         Returns (has_conflicts, conflicted_files).
@@ -85,9 +103,9 @@ class RemoteMixin:
         """
         remote_url = self.get_remote_url()
         if not remote_url:
-            raise GitError("No remote URL configured. Set one in the GitHub panel first.")
+            raise GitError("No remote URL configured. Set one in the Git Remote panel first.")
 
-        pull_url = _inject_token(remote_url, token)
+        pull_url = _inject_token(remote_url, token, username)
         branch = self.current_branch()
 
         r = self._run('pull', pull_url, branch, check=False, timeout=60)
@@ -104,19 +122,19 @@ class RemoteMixin:
         msg = r.stderr.strip() or r.stdout.strip() or 'pull failed'
         raise GitError(msg)
 
-    def fetch(self, token: str = '') -> str:
+    def fetch(self, token: str = '', username: str = '') -> str:
         """Fetch from origin without merging. Returns stdout."""
         remote_url = self.get_remote_url()
         if not remote_url:
             raise GitError("No remote URL configured.")
-        fetch_url = _inject_token(remote_url, token)
+        fetch_url = _inject_token(remote_url, token, username)
         r = self._run('fetch', fetch_url, check=False, timeout=60)
         if r.returncode != 0:
             msg = r.stderr.strip() or r.stdout.strip() or 'fetch failed'
             raise GitError(msg)
         return r.stdout.strip()
 
-    def fetch_only(self, token: str = '') -> str:
+    def fetch_only(self, token: str = '', username: str = '') -> str:
         """
         Fetch the current branch from origin so origin/<branch> is updated,
         without touching the working tree.  Returns stdout.
@@ -124,7 +142,7 @@ class RemoteMixin:
         remote_url = self.get_remote_url()
         if not remote_url:
             raise GitError("No remote URL configured.")
-        fetch_url = _inject_token(remote_url, token)
+        fetch_url = _inject_token(remote_url, token, username)
         branch = self.current_branch()
         r = self._run('fetch', fetch_url, branch, check=False, timeout=60)
         if r.returncode != 0:

@@ -88,7 +88,7 @@ SCENE_PROPS = {
     # Clone workflow
     'nodesync_clone_url': bpy.props.StringProperty(
         name        = 'Clone URL',
-        description = 'GitHub repository HTTPS URL to clone from',
+        description = 'Git repository URL (HTTPS or SSH) to clone from',
         default     = '',
     ),
     'nodesync_clone_dir': bpy.props.StringProperty(
@@ -97,10 +97,10 @@ SCENE_PROPS = {
         subtype     = 'DIR_PATH',
         default     = '',
     ),
-    # GitHub / remote
+    # Git remote
     'nodesync_remote_url': bpy.props.StringProperty(
         name        = 'Remote URL',
-        description = 'GitHub repository HTTPS URL',
+        description = 'Git repository URL (HTTPS or SSH) for push and pull',
         default     = '',
     ),
     'nodesync_sync_status': bpy.props.StringProperty(

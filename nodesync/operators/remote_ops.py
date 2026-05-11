@@ -1,5 +1,5 @@
 """
-Operators for GitHub remote operations: clone, set remote, push, pull.
+Operators for Git remote operations: clone, set remote, push, pull.
 """
 
 import bpy
@@ -7,7 +7,7 @@ import os
 
 from .helpers import (
     _get_project,
-    _get_token,
+    _get_credentials,
     _get_addon_prefs,
     _refresh_branches,
     _refresh_history,
@@ -17,11 +17,12 @@ from .helpers import (
 )
 
 
-class NODESYNC_OT_clone_from_github(bpy.types.Operator):
-    bl_idname      = 'nodesync.clone_from_github'
-    bl_label       = 'Clone from GitHub'
-    bl_description = ('Clone an existing NodeSync GitHub repository into a '
-                      'local folder and open it as the active project')
+class NODESYNC_OT_clone_from_url(bpy.types.Operator):
+    bl_idname      = 'nodesync.clone_from_url'
+    bl_label       = 'Clone from Git Remote'
+    bl_description = ('Clone an existing NodeSync repository from a Git '
+                      'remote URL into a local folder and open it as the '
+                      'active project')
 
     def invoke(self, context, event):
         # Pre-fill clone dir from blend file location if available
@@ -35,17 +36,18 @@ class NODESYNC_OT_clone_from_github(bpy.types.Operator):
         scene  = context.scene
         layout.label(text='Repository URL:')
         layout.prop(scene, 'nodesync_clone_url', text='',
-                    placeholder='https://github.com/user/repo')
+                    placeholder='https://example.com/user/repo.git')
         layout.separator()
         layout.label(text='Clone into folder:')
         layout.prop(scene, 'nodesync_clone_dir', text='')
         layout.separator()
         if not scene.nodesync_clone_url.strip():
-            layout.label(text='Enter a GitHub URL above', icon='INFO')
+            layout.label(text='Enter a Git repository URL above', icon='INFO')
         prefs = _get_addon_prefs(context)
-        token_set = bool(prefs and getattr(prefs, 'github_token', '').strip())
+        token_set = bool(prefs and getattr(prefs, 'remote_token', '').strip())
         if not token_set:
-            layout.label(text='No token set — only public repos will work', icon='ERROR')
+            layout.label(text='No token set — only public repos and SSH URLs will work',
+                         icon='INFO')
 
     def execute(self, context):
         scene = context.scene
@@ -53,7 +55,7 @@ class NODESYNC_OT_clone_from_github(bpy.types.Operator):
         directory = scene.nodesync_clone_dir.strip().rstrip('/\\')
 
         if not url:
-            self.report({'ERROR'}, "Enter a GitHub repository URL")
+            self.report({'ERROR'}, "Enter a Git repository URL")
             return {'CANCELLED'}
         if not directory:
             self.report({'ERROR'}, "Choose a local folder to clone into")
@@ -74,13 +76,13 @@ class NODESYNC_OT_clone_from_github(bpy.types.Operator):
                         "Delete it or choose a different parent folder.")
             return {'CANCELLED'}
 
-        token = _get_token(context)
+        username, token = _get_credentials(context)
 
         from ..git_ops import GitRepo, GitNotFoundError, GitError
         from ..project import NodeSyncProject
 
         try:
-            GitRepo.clone(url, target_dir, token=token)
+            GitRepo.clone(url, target_dir, token=token, username=username)
         except GitNotFoundError as e:
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
@@ -118,7 +120,7 @@ class NODESYNC_OT_clone_from_github(bpy.types.Operator):
 class NODESYNC_OT_set_remote(bpy.types.Operator):
     bl_idname      = 'nodesync.set_remote'
     bl_label       = 'Set Remote'
-    bl_description = 'Save the GitHub repository URL and configure git remote'
+    bl_description = 'Save the Git remote URL and configure the origin remote'
 
     @classmethod
     def poll(cls, context):
@@ -128,7 +130,7 @@ class NODESYNC_OT_set_remote(bpy.types.Operator):
         scene = context.scene
         url   = scene.nodesync_remote_url.strip()
         if not url:
-            self.report({'ERROR'}, "Enter a GitHub repository URL first")
+            self.report({'ERROR'}, "Enter a Git repository URL first")
             return {'CANCELLED'}
 
         proj = _get_project(scene)
@@ -152,7 +154,7 @@ class NODESYNC_OT_set_remote(bpy.types.Operator):
 class NODESYNC_OT_push(bpy.types.Operator):
     bl_idname      = 'nodesync.push'
     bl_label       = 'Push'
-    bl_description = 'Push commits to GitHub'
+    bl_description = 'Push commits to the configured Git remote'
 
     @classmethod
     def poll(cls, context):
@@ -167,12 +169,12 @@ class NODESYNC_OT_push(bpy.types.Operator):
             self.report({'ERROR'}, "No active NodeSync project")
             return {'CANCELLED'}
 
-        token = _get_token(context)
+        username, token = _get_credentials(context)
 
         from ..git_ops import GitRepo, GitError
         try:
             repo = GitRepo(proj.root)
-            repo.push(token=token)
+            repo.push(token=token, username=username)
             scene.nodesync_sync_status = 'Pushed OK'
             _schedule_sync_status_clear(scene, 'Pushed OK')
             branch = repo.current_branch()
@@ -275,8 +277,8 @@ def _group_name_for_path(rel_path: str) -> str:
 class NODESYNC_OT_pull(bpy.types.Operator):
     bl_idname      = 'nodesync.pull'
     bl_label       = 'Pull'
-    bl_description = ('Fetch from GitHub, then choose which node groups to '
-                      'apply from the incoming changes')
+    bl_description = ('Fetch from the configured Git remote, then choose '
+                      'which node groups to apply from the incoming changes')
 
     @classmethod
     def poll(cls, context):
@@ -292,13 +294,13 @@ class NODESYNC_OT_pull(bpy.types.Operator):
             self.report({'ERROR'}, "No active NodeSync project")
             return {'CANCELLED'}
 
-        token = _get_token(context)
+        username, token = _get_credentials(context)
 
         from ..git_ops import GitRepo, GitError
         try:
             repo   = GitRepo(proj.root)
             branch = repo.current_branch()
-            repo.fetch_only(token=token)
+            repo.fetch_only(token=token, username=username)
             diff = repo.diff_local_vs_remote(branch)
         except GitError as e:
             scene.nodesync_sync_status = 'Fetch failed'
@@ -519,7 +521,7 @@ class NODESYNC_OT_pull_select_none(bpy.types.Operator):
 
 
 classes = [
-    NODESYNC_OT_clone_from_github,
+    NODESYNC_OT_clone_from_url,
     NODESYNC_OT_set_remote,
     NODESYNC_OT_push,
     NODESYNC_OT_confirm_pull_changes,

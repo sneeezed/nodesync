@@ -2,9 +2,9 @@
 
 ![NodeSync Demo](NodeSyncDemo.gif)
 
-**NodeSync** is a Blender addon that brings Git-based version control to your node trees. It tracks Geometry Nodes, Shader Nodes (materials, worlds, and lights), and the image textures they reference — letting you commit, branch, push, pull, and restore your setups just like source code, with full GitHub integration and a live diff overlay.
+**NodeSync** is a Blender addon that brings Git-based version control to your node trees. It tracks Geometry Nodes, Shader Nodes (materials, worlds, and lights), and the image textures they reference — letting you commit, branch, push, pull, and restore your setups just like source code, with support for any Git remote (GitHub, GitLab, Codeberg, Gitea, Bitbucket, self-hosted, ...) and a live diff overlay.
 
-Each node tree is serialized to a JSON file and tracked individually in Git, giving you a precise history of every change. Branch for experiments, collaborate through GitHub, and restore any version in seconds.
+Each node tree is serialized to a JSON file and tracked individually in Git, giving you a precise history of every change. Branch for experiments, collaborate through any Git host you already use, and restore any version in seconds.
 
 ---
 
@@ -12,7 +12,7 @@ Each node tree is serialized to a JSON file and tracked individually in Git, giv
 
 - **Commit & restore** any version of your Geometry and Shader node trees
 - **Branch** to experiment without breaking your main setup
-- **Push/pull** to/from GitHub for backup and collaboration
+- **Push/pull** to/from any Git remote for backup and collaboration
 - **Auto-push on commit** — optionally publish every commit to your remote without a separate click
 - **Visualize diffs** with a color overlay (added / modified / deleted nodes), with an adjustable diff base
 - **Multi-lane history coloring** — each commit is colored by the most-specific branch that reaches it, so the default branch owns shared ancestors
@@ -47,17 +47,21 @@ The NodeSync panel appears in both the **Geometry Node Editor** and **Shader Edi
 1. Type a message in the **Commit message** field
 2. Click **Commit** — all Geometry and Shader node trees are serialized to JSON and committed
 
-### Connect to GitHub (Optional)
+### Connect to a Git Remote (Optional)
 
-1. Create an empty repo on GitHub
-2. Paste the repo URL into the **Remote URL** field and click **Set Remote**
-3. Add your GitHub Personal Access Token (PAT) in **Edit → Preferences → Add-ons → NodeSync**
-4. Click **Push ↑** to upload
+1. Create an empty repo on your Git host of choice (GitHub, GitLab, Codeberg, Gitea, Bitbucket, self-hosted Forgejo, ...).
+2. Paste the repo URL into the **Remote URL** field and click **Set Remote**.
+3. Add your credentials in **Edit → Preferences → Add-ons → NodeSync**:
+   - **Personal Access Token** — generated from your Git host's user settings (scope: write to your repo). Required for pushing; reading public repos works without one.
+   - **Remote Username** — host-specific. Leave blank for GitHub or Azure DevOps; use `oauth2` for GitLab; `x-token-auth` for Bitbucket; your account name for Codeberg / Gitea / Forgejo.
+4. Click **Push ↑** to upload.
+
+> SSH URLs (`git@host:user/repo.git`) work too — they bypass the token field entirely and use your system SSH agent.
 
 ### Clone an Existing Project
 
-1. Paste the GitHub URL and choose a local folder
-2. Click **Clone from GitHub** — all node trees (geometry and shader) are imported automatically
+1. Paste the Git repository URL and choose a local folder.
+2. Click **Clone from Git Remote** — all node trees (geometry and shader) are imported automatically.
 
 ---
 
@@ -133,18 +137,18 @@ When **Track Shader Textures** is enabled (Addon Preferences → Commit Behaviou
 - Packed images and generated images are written via Blender's render pipeline
 - External images are copied verbatim from their source path
 
-This means a fresh `git clone` + **Clone from GitHub** gives a fully reproducible shader setup.
+This means a fresh `git clone` + **Clone from Git Remote** gives a fully reproducible shader setup.
 
 ### Branching
 
 - **Create Branch** from the Branches panel
 - **Switch Branch** — reimports all node trees from the target branch
 - Each branch gets a unique color swatch shown in the history list
-- History coloring uses GitHub-style lanes: shared ancestors are colored by the default branch, and feature branches keep their own color only on commits that aren't reachable from `main`
+- History coloring uses branch lanes: shared ancestors are colored by the default branch, and feature branches keep their own color only on commits that aren't reachable from `main`
 
 ### Push & Pull
 
-- **Push ↑** — sends your commits to GitHub
+- **Push ↑** — sends your commits to the configured Git remote
 - **Auto-Push on Commit** — turn on in addon preferences to push automatically after every commit
 - **Pull ↓** — fetches and shows a per-group selection dialog so you can choose which incoming changes to apply; reimports changed trees automatically and advances the history bookmark to the new HEAD
 - On **merge conflicts**, a Conflicts panel appears with per-file options:
@@ -157,7 +161,8 @@ This means a fresh `git clone` + **Clone from GitHub** gives a fully reproducibl
 
 | Preference | Description |
 |------------|-------------|
-| **GitHub Personal Access Token** | Classic PAT with `repo` scope for push/pull |
+| **Remote Username** | Host-specific username for HTTPS auth. Blank for GitHub / Azure DevOps; `oauth2` for GitLab; `x-token-auth` for Bitbucket; account name for Codeberg / Gitea / Forgejo |
+| **Personal Access Token** | Token used as the password for HTTPS push/pull. Generated in your Git host's user settings; needs write-repository scope |
 | **Auto-Push on Commit** | Automatically push after every commit when a remote is configured |
 | **Screenshot Node Editor on Commit** | Capture a screenshot of the node editor and attach it to the commit |
 | **Track Shader Textures** | Copy image textures from Shader Image Texture nodes into `textures/` on commit |
@@ -185,4 +190,4 @@ Git operations run via subprocess. No external Python dependencies required — 
 
 - Blender 4.x
 - Git installed and on your PATH
-- GitHub PAT with `repo` scope (for push/pull only)
+- A Personal Access Token from your Git host (GitHub, GitLab, Codeberg, Gitea, Bitbucket, ...) — only needed for pushing or for pulling private repos. Public-repo reads work without one, and SSH URLs use your system SSH agent instead

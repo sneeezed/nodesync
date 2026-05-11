@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "nodesync"
-version = "1.2.2"
+version = "1.3.0"
 name = "NodeSync"
 tagline = "Git version control for your Geometry and Shader node trees"
 maintainer = "sneeezed"
@@ -15,4 +15,4 @@ tags = ["Node"]
 
 [permissions]
   files = "Write node trees to disk and manage a local Git repo"
-  network = "Push and pull node trees to/from GitHub"
+  network = "Push and pull node trees to/from a user-supplied Git remote"

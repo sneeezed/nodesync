@@ -6,7 +6,7 @@ Sub-modules:
   project_ops     — init_project, open_project
   commit_ops      — commit, refresh_history, checkout_commit, toggle_history_filter
   diff_ops        — enter_diff, exit_diff, diff_legend
-  remote_ops      — clone_from_github, set_remote, push, pull, confirm_pull_changes
+  remote_ops      — clone_from_url, set_remote, push, pull, confirm_pull_changes
   branch_ops      — create_branch, switch_branch
   conflict_ops    — resolve_conflict, complete_merge, abort_merge
 """

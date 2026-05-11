@@ -21,16 +21,28 @@ _previews = None
 
 
 # ---------------------------------------------------------------------------
-# Addon Preferences — GitHub token storage
+# Addon Preferences — Git remote credential storage
 # ---------------------------------------------------------------------------
 
 class NodeSyncPreferences(bpy.types.AddonPreferences):
     bl_idname = __package__
 
-    github_token: bpy.props.StringProperty(
-        name        = 'GitHub Personal Access Token',
-        description = ('Classic PAT with repo scope from github.com → '
-                       'Settings → Developer settings → Personal access tokens'),
+    remote_username: bpy.props.StringProperty(
+        name        = 'Remote Username',
+        description = ('Username for HTTPS authentication with your Git '
+                       'remote.  Service-specific values: leave blank for '
+                       'GitHub or Azure DevOps; use "oauth2" for GitLab; '
+                       '"x-token-auth" for Bitbucket; your account name '
+                       'for Codeberg, Gitea, or self-hosted Forgejo'),
+        default     = '',
+    )
+
+    remote_token: bpy.props.StringProperty(
+        name        = 'Personal Access Token',
+        description = ('Token for HTTPS authentication with your Git remote '
+                       '(GitLab, Codeberg, Gitea, GitHub, Bitbucket, '
+                       'self-hosted, etc.).  Leave blank if you authenticate '
+                       'over SSH instead'),
         subtype     = 'PASSWORD',
         default     = '',
     )
@@ -38,7 +50,7 @@ class NodeSyncPreferences(bpy.types.AddonPreferences):
     auto_push_on_commit: bpy.props.BoolProperty(
         name        = 'Auto-Push on Commit',
         description = ('Automatically push to the remote after every commit '
-                       'when a GitHub remote URL is configured'),
+                       'when a remote URL is configured'),
         default     = False,
     )
 
@@ -59,11 +71,21 @@ class NodeSyncPreferences(bpy.types.AddonPreferences):
 
     def draw(self, context):
         layout = self.layout
-        layout.label(text='GitHub Authentication', icon='URL')
+        layout.label(text='Git Remote Authentication', icon='URL')
         box = layout.box()
-        box.prop(self, 'github_token')
-        if not self.github_token:
-            box.label(text='Token required for Push / Pull', icon='ERROR')
+        box.prop(self, 'remote_username')
+        box.prop(self, 'remote_token')
+        if not self.remote_token:
+            box.label(text='Token required for HTTPS Push / Pull '
+                           '(SSH URLs use your SSH agent instead)',
+                      icon='INFO')
+        col = box.column(align=True)
+        col.scale_y = 0.85
+        col.label(text='Username hints:', icon='QUESTION')
+        col.label(text='  • GitHub / Azure DevOps — leave blank')
+        col.label(text='  • GitLab — "oauth2"')
+        col.label(text='  • Bitbucket — "x-token-auth"')
+        col.label(text='  • Codeberg / Gitea / Forgejo — your account name')
         layout.separator()
         layout.label(text='Commit Behaviour', icon='FILE_TICK')
         layout.prop(self, 'auto_push_on_commit')
