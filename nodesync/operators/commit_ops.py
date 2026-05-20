@@ -4,7 +4,9 @@ Operators for committing, restoring, and filtering commit history.
 
 import bpy
 import os
-import threading
+import shutil
+import subprocess
+import time
 
 from .helpers import (
     _get_project,
@@ -19,6 +21,7 @@ from .helpers import (
     _remove_node_data,
     _schedule_sync_status_clear,
 )
+from ..git_ops.remote import _inject_token
 
 
 class NODESYNC_OT_commit(bpy.types.Operator):
@@ -26,9 +29,24 @@ class NODESYNC_OT_commit(bpy.types.Operator):
     bl_label   = 'Commit'
     bl_description = 'Export tracked node groups to JSON and create a Git commit'
 
-    _timer  = None
-    _thread = None
-    _result = None
+    # Modal state machine
+    _timer      = None
+    _proc       = None
+    _proc_step  = None
+    _proc_start = 0.0
+    _steps      = None    # list of {'label', 'args', 'timeout', 'on_done'}
+    _step_idx   = 0
+    _result     = None
+    _error      = None
+
+    # Carried from execute() into modal()
+    _git_exe         = ''
+    _proj            = None
+    _proj_root       = ''
+    _do_screenshot   = False
+    _texture_warning = ''
+    _auto_push       = False
+    _auto_push_url   = ''
 
     @classmethod
     def poll(cls, context):
@@ -46,13 +64,12 @@ class NODESYNC_OT_commit(bpy.types.Operator):
             self.report({'ERROR'}, "No active NodeSync project")
             return {'CANCELLED'}
 
-        # Export all tracked node groups — must be on main thread (reads bpy data)
+        # Main-thread-only: export node groups to JSON before staging.
         exported = proj.export_all_groups()
         if not exported:
             self.report({'WARNING'}, "No tracked node groups found in file")
             return {'CANCELLED'}
 
-        # Read preferences on main thread before spawning the worker thread
         prefs = _get_addon_prefs(context)
         if prefs is not None:
             track_textures = bool(getattr(prefs, 'track_textures', False))
@@ -63,7 +80,7 @@ class NODESYNC_OT_commit(bpy.types.Operator):
             do_screenshot  = False
             auto_push      = False
 
-        # Collect textures on main thread — uses bpy.data and image.save_render
+        # Texture collection touches bpy.data / image.save_render — main thread only.
         textures_written = 0
         texture_warning  = ''
         if track_textures:
@@ -76,106 +93,303 @@ class NODESYNC_OT_commit(bpy.types.Operator):
             username, token = _get_credentials(context)
         else:
             username, token = '', ''
-        remote_url = scene.nodesync_remote_url.strip()
+        remote_url_pref = scene.nodesync_remote_url.strip()
         proj_root  = proj.root
         n_exported = len(exported)
 
-        self._result          = None
+        git_exe = shutil.which('git')
+        if git_exe is None:
+            self.report({'ERROR'},
+                        "Git executable not found in PATH. "
+                        "Install Git and make sure it is on your system PATH.")
+            return {'CANCELLED'}
+
+        # Resolve the origin URL synchronously — it's a local git-config read
+        # with no network I/O, so it's effectively instant.  Only the slow
+        # steps below need to be driven asynchronously.
+        push_url = ''
+        if auto_push and remote_url_pref:
+            try:
+                r = subprocess.run(
+                    [git_exe, 'remote', 'get-url', 'origin'],
+                    cwd=proj_root, capture_output=True, text=True, timeout=10,
+                )
+                origin = r.stdout.strip() if r.returncode == 0 else ''
+            except Exception:
+                origin = ''
+            if origin:
+                push_url = _inject_token(origin, token, username)
+
         self._proj            = proj
+        self._proj_root       = proj_root
+        self._git_exe         = git_exe
         self._do_screenshot   = do_screenshot
         self._texture_warning = texture_warning
+        self._auto_push       = bool(push_url)
+        self._auto_push_url   = push_url
 
-        def _git_work():
-            result = {}
-            try:
-                from ..git_ops import GitRepo, GitNotFoundError, GitError
-                try:
-                    repo = GitRepo(proj_root)
+        self._steps      = []
+        self._step_idx   = 0
+        self._proc       = None
+        self._proc_step  = None
+        self._proc_start = 0.0
+        self._error      = None
+        self._result     = {
+            'short_hash':      '',
+            'full_hash':       '',
+            'msg':             msg,
+            'exported_count':  n_exported,
+            'history_entries': None,
+            'history_head':    '',
+            'current_branch':  '',
+            'branches':        [],
+            'branch_reach':    {},
+            'pushed':          False,
+            'push_branch':     '',
+            'push_error':      '',
+        }
 
-                    repo.add('nodes/')
-                    if track_textures and textures_written:
-                        repo.add('textures/')
-                    repo.add(os.path.join(proj_root, '.nodesync'))
+        # Stage 1 — staging + commit
+        self._steps.append({
+            'label':   'add nodes/',
+            'args':    ['add', 'nodes/'],
+            'timeout': 30,
+            'on_done': self._on_step_fail_if_rc,
+        })
+        if track_textures and textures_written:
+            self._steps.append({
+                'label':   'add textures/',
+                'args':    ['add', 'textures/'],
+                'timeout': 30,
+                'on_done': self._on_step_fail_if_rc,
+            })
+        self._steps.append({
+            'label':   'add .nodesync',
+            'args':    ['add', os.path.join(proj_root, '.nodesync')],
+            'timeout': 30,
+            'on_done': self._on_step_fail_if_rc,
+        })
+        self._steps.append({
+            'label':   'commit',
+            'args':    ['commit', '-m', msg],
+            'timeout': 30,
+            'on_done': self._on_step_fail_if_rc,
+        })
 
-                    short_hash = repo.commit(msg)
-                    full_hash  = repo.current_commit_hash(short=False)
-
-                    result['short_hash']     = short_hash
-                    result['full_hash']      = full_hash
-                    result['exported_count'] = n_exported
-                    result['msg']            = msg
-
-                    # Fetch history and branch data while still in the thread
-                    try:
-                        entries        = repo.log(300)
-                        head_full      = repo.current_commit_hash(short=False)
-                        current_branch = repo.current_branch()
-                        branches       = repo.list_branches()
-                        branch_reach   = {b: repo.rev_list(b) for b in branches}
-                        result['history_entries'] = entries
-                        result['history_head']    = head_full
-                        result['current_branch']  = current_branch
-                        result['branches']        = branches
-                        result['branch_reach']    = branch_reach
-                    except Exception:
-                        pass  # modal will fall back to synchronous refresh
-
-                    if auto_push and remote_url:
-                        try:
-                            branch = repo.current_branch()
-                            repo.push(token=token, username=username)
-                            result['pushed']      = True
-                            result['push_branch'] = branch
-                        except GitError as e:
-                            result['push_error'] = str(e)
-
-                except GitNotFoundError as e:
-                    result['error'] = str(e)
-                except GitError as e:
-                    result['error'] = str(e)
-            except Exception as e:
-                result['error'] = f"Unexpected error: {e}"
-            finally:
-                self._result = result
-
-        self._thread = threading.Thread(target=_git_work, daemon=True)
-        self._thread.start()
+        # Stage 2 — post-commit metadata fetch (used to refresh the UI)
+        self._steps.append({
+            'label':   'rev-parse HEAD',
+            'args':    ['rev-parse', 'HEAD'],
+            'timeout': 10,
+            'on_done': self._on_rev_parse_head_done,
+        })
+        self._steps.append({
+            'label':   'log',
+            'args':    ['log', '-300',
+                        '--pretty=format:%H\x1f%s\x1f%an\x1f%ai\x1f%D'],
+            'timeout': 30,
+            'on_done': self._on_log_done,
+        })
+        self._steps.append({
+            'label':   'rev-parse --abbrev-ref HEAD',
+            'args':    ['rev-parse', '--abbrev-ref', 'HEAD'],
+            'timeout': 10,
+            'on_done': self._on_abbrev_ref_done,
+        })
+        # Branch listing dynamically appends one rev-list step per branch, and
+        # the push step (if auto-push is enabled).
+        self._steps.append({
+            'label':   'branch',
+            'args':    ['branch'],
+            'timeout': 10,
+            'on_done': self._on_branch_list_done,
+        })
 
         wm = context.window_manager
         self._timer = wm.event_timer_add(0.05, window=context.window)
         wm.modal_handler_add(self)
         return {'RUNNING_MODAL'}
 
+    # ----- Step result callbacks ------------------------------------------------
+
+    def _on_step_fail_if_rc(self, rc, out, err):
+        if rc != 0:
+            self._error = (err.strip() or out.strip()
+                           or f"git exited with code {rc}")
+
+    def _on_rev_parse_head_done(self, rc, out, err):
+        if rc != 0 or not out.strip():
+            self._error = err.strip() or out.strip() or "rev-parse HEAD failed"
+            return
+        full = out.strip()
+        self._result['full_hash']    = full
+        self._result['short_hash']   = full[:8]
+        self._result['history_head'] = full
+
+    def _on_log_done(self, rc, out, err):
+        # Log failure is non-fatal — fall back to a sync refresh on finalize.
+        if rc != 0:
+            return
+        entries = []
+        text = out.strip()
+        if text:
+            for line in text.split('\n'):
+                parts = line.split('\x1f')
+                if len(parts) < 4:
+                    continue
+                raw_dec = parts[4].strip() if len(parts) >= 5 else ''
+                decorations = []
+                if raw_dec:
+                    for d in raw_dec.split(','):
+                        d = d.strip()
+                        if '->' in d:
+                            d = d.split('->')[-1].strip()
+                        if d and d != 'HEAD':
+                            decorations.append(d)
+                entries.append({
+                    'full_hash':   parts[0],
+                    'hash':        parts[0][:8],
+                    'subject':     parts[1],
+                    'author':      parts[2],
+                    'date':        parts[3][:10],
+                    'decorations': decorations,
+                })
+        self._result['history_entries'] = entries
+
+    def _on_abbrev_ref_done(self, rc, out, err):
+        self._result['current_branch'] = (out.strip()
+                                          if rc == 0 and out.strip()
+                                          else 'main')
+
+    def _on_branch_list_done(self, rc, out, err):
+        branches = []
+        if rc == 0 and out.strip():
+            for line in out.strip().split('\n'):
+                name = line.strip().lstrip('* ').strip()
+                if name:
+                    branches.append(name)
+        self._result['branches'] = branches
+
+        for b in branches:
+            self._steps.append({
+                'label':   f'rev-list {b}',
+                'args':    ['rev-list', '--max-count=1000', b],
+                'timeout': 30,
+                'on_done': (lambda rc, out, err, _b=b:
+                            self._on_rev_list_done(_b, rc, out, err)),
+            })
+
+        if self._auto_push:
+            branch = self._result['current_branch']
+            self._steps.append({
+                'label':   f'push {branch}',
+                'args':    ['push', '--set-upstream',
+                            self._auto_push_url, branch],
+                'timeout': 60,
+                'on_done': self._on_push_done,
+            })
+
+    def _on_rev_list_done(self, branch, rc, out, err):
+        if rc != 0 or not out.strip():
+            self._result['branch_reach'][branch] = set()
+        else:
+            self._result['branch_reach'][branch] = set(out.strip().splitlines())
+
+    def _on_push_done(self, rc, out, err):
+        if rc != 0:
+            self._result['push_error'] = (err.strip() or out.strip()
+                                          or 'push failed')
+        else:
+            self._result['pushed']      = True
+            self._result['push_branch'] = self._result['current_branch']
+
+    # ----- Modal driver ---------------------------------------------------------
+
     def modal(self, context, event):
         if event.type != 'TIMER':
             return {'PASS_THROUGH'}
 
-        if self._thread.is_alive():
+        # If a subprocess is currently in flight, poll it.
+        if self._proc is not None:
+            rc = self._proc.poll()
+            if rc is None:
+                if (time.time() - self._proc_start) > self._proc_step['timeout']:
+                    try:
+                        self._proc.kill()
+                    except Exception:
+                        pass
+                    try:
+                        self._proc.communicate(timeout=1)
+                    except Exception:
+                        pass
+                    self._error = (f"git {self._proc_step['label']} "
+                                   f"timed out after "
+                                   f"{self._proc_step['timeout']}s")
+                    self._proc      = None
+                    self._proc_step = None
+                else:
+                    return {'PASS_THROUGH'}
+            else:
+                try:
+                    out, err = self._proc.communicate(timeout=1)
+                except Exception:
+                    out, err = '', ''
+                step = self._proc_step
+                self._proc      = None
+                self._proc_step = None
+                try:
+                    step['on_done'](rc, out or '', err or '')
+                except Exception as e:
+                    self._error = f"Error processing {step['label']}: {e}"
+
+        if self._error is not None:
+            return self._finalize_error(context)
+
+        # No subprocess running — start the next queued step or finish.
+        if self._step_idx < len(self._steps):
+            step = self._steps[self._step_idx]
+            self._step_idx += 1
+            try:
+                self._proc = subprocess.Popen(
+                    [self._git_exe] + step['args'],
+                    cwd=self._proj_root,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                self._proc_step  = step
+                self._proc_start = time.time()
+            except Exception as e:
+                self._error = f"Failed to start git {step['label']}: {e}"
+                return self._finalize_error(context)
             return {'PASS_THROUGH'}
 
-        context.window_manager.event_timer_remove(self._timer)
-        self._timer = None
+        return self._finalize_success(context)
 
+    # ----- Finalization ---------------------------------------------------------
+
+    def _finalize_success(self, context):
+        self._remove_timer(context)
         result = self._result
         scene  = context.scene
 
-        if result is None or result.get('error'):
-            self.report({'ERROR'}, (result or {}).get('error', 'Unknown git error'))
-            return {'CANCELLED'}
-
         if self._texture_warning:
-            self.report({'WARNING'}, f"Texture collection failed: {self._texture_warning}")
+            self.report({'WARNING'},
+                        f"Texture collection failed: {self._texture_warning}")
 
         scene.nodesync_commit_message = ''
         scene.nodesync_restore_hash   = ''
 
-        # Apply pre-fetched history/branch data (no subprocess calls here)
-        if 'history_entries' in result:
+        if result.get('history_entries') is not None:
             self._apply_history(scene, result)
+        else:
+            _refresh_history(scene, self._proj.root)
+
+        if result.get('branches'):
             self._apply_branches(scene, result)
         else:
             _refresh_branches(scene, self._proj.root)
-            _refresh_history(scene, self._proj.root)
 
         msg_preview = result['msg'][:40]
         self.report({'INFO'},
@@ -185,10 +399,12 @@ class NODESYNC_OT_commit(bpy.types.Operator):
         if result.get('pushed'):
             scene.nodesync_sync_status = 'Pushed OK'
             _schedule_sync_status_clear(scene, 'Pushed OK')
-            self.report({'INFO'}, f"Auto-pushed branch '{result['push_branch']}' to origin")
+            self.report({'INFO'},
+                        f"Auto-pushed branch '{result['push_branch']}' to origin")
         elif result.get('push_error'):
             scene.nodesync_sync_status = 'Auto-push failed'
-            self.report({'WARNING'}, f"Commit OK but auto-push failed: {result['push_error']}")
+            self.report({'WARNING'},
+                        f"Commit OK but auto-push failed: {result['push_error']}")
 
         if self._do_screenshot:
             previews_dir = os.path.join(self._proj.root, 'previews')
@@ -201,14 +417,41 @@ class NODESYNC_OT_commit(bpy.types.Operator):
                         check_existing=False,
                     )
             except Exception as e:
-                self.report({'WARNING'}, f"Commit OK but screenshot failed: {e}")
+                self.report({'WARNING'},
+                            f"Commit OK but screenshot failed: {e}")
 
         return {'FINISHED'}
 
+    def _finalize_error(self, context):
+        self._cleanup_proc()
+        self._remove_timer(context)
+        self.report({'ERROR'}, self._error or 'Unknown git error')
+        return {'CANCELLED'}
+
     def cancel(self, context):
-        if self._timer:
-            context.window_manager.event_timer_remove(self._timer)
+        self._cleanup_proc()
+        self._remove_timer(context)
+
+    def _cleanup_proc(self):
+        if self._proc is not None:
+            try:
+                if self._proc.poll() is None:
+                    self._proc.kill()
+                self._proc.communicate(timeout=1)
+            except Exception:
+                pass
+            self._proc      = None
+            self._proc_step = None
+
+    def _remove_timer(self, context):
+        if self._timer is not None:
+            try:
+                context.window_manager.event_timer_remove(self._timer)
+            except Exception:
+                pass
             self._timer = None
+
+    # ----- UI application (unchanged behavior) ---------------------------------
 
     def _apply_history(self, scene, result):
         entries        = result.get('history_entries', [])
@@ -313,7 +556,21 @@ class NODESYNC_OT_checkout_commit(bpy.types.Operator):
             except OSError as e:
                 print(f"[NodeSync] Could not remove '{rel_path}': {e}")
 
-        imported = proj.import_all_from_disk()
+        # Only reimport files that actually changed between the worktree and
+        # the target commit.  Unchanged groups stay in bpy.data untouched, so a
+        # huge revert that only modifies a handful of trees no longer pays the
+        # cost of clearing and rebuilding every other group via the Python API
+        # (which is what made large reverts feel much slower than Ctrl+Z).
+        from ..project import ASSIGNMENTS_FILENAME, NODES_DIRNAME
+        assignments_rel = f"{NODES_DIRNAME}/{ASSIGNMENTS_FILENAME}"
+        to_reimport = [
+            p for p in (diff['modified'] + diff['deleted'])
+            if p != assignments_rel
+        ]
+        if to_reimport:
+            imported = proj.import_specific_from_disk(to_reimport)
+        else:
+            imported = []
         proj.apply_scene_assignments()
 
         scene.nodesync_restore_hash = self.commit_hash
