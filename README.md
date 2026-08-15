@@ -139,6 +139,41 @@ When **Track Shader Textures** is enabled (Addon Preferences → Commit Behaviou
 
 This means a fresh `git clone` + **Clone from Git Remote** gives a fully reproducible shader setup.
 
+Image names are sanitized before they hit disk (see [Filenames on disk](#filenames-on-disk)). The image's real name is stored inside the JSON, so the node reconnects to the right image on import no matter what the file ended up being called.
+
+### Filenames on disk
+
+Blender allows characters in a data-block name that a filesystem does not — `/`, `:`, trailing spaces, trailing dots. Written out verbatim, some of those produce files the OS mangles: on Windows a name ending in a space or a dot cannot be opened, renamed or deleted through Explorer or `del`, because Win32 silently resolves the path to a different name.
+
+NodeSync sanitizes every name before using it as a filename:
+
+- path separators, `<>:"|?*` and control characters become `_`
+- leading and trailing whitespace and trailing dots are stripped
+- Windows device names (`CON`, `NUL`, `COM1`…) are prefixed with `_`
+- a name that had to be changed gets a short hash of the original appended, so two different node groups can never collide on one file
+
+| Data-block name | File written |
+|-----------------|--------------|
+| `Rock Generator` | `Rock Generator.json` |
+| `Wood/Bar` | `Wood_Bar~d1aee731.json` |
+| `Wood:Bar` | `Wood_Bar~7298d2b5.json` |
+| `Metal ` (trailing space) | `Metal~4acf34d4.json` |
+
+Names that need no cleaning are left exactly as they are, so ordinary projects still have readable filenames. The hash only appears where it prevents a real collision or an unusable file.
+
+### Migrating projects made before 1.3.4
+
+Projects created by an earlier version still contain files written under the old scheme. When NodeSync detects them it shows a **Migrate Project Files** button in the Project panel, with a count of what needs changing.
+
+The button opens a dialog listing every rename before anything happens. Applying it renames files to the current scheme, repairs names the OS cannot delete, and stages the result so your next commit records clean renames rather than a pile of deletions. Each file's correct name is recovered from the JSON contents, not from its current filename, so it works even on files whose names were mangled beyond recognition.
+
+Two things worth knowing:
+
+- **Commit or stash first.** The migration edits files in your project folder.
+- **Everyone on a shared repo needs 1.3.4 before you push a migration.** An older version will re-create the old filenames and undo it.
+
+One case cannot be repaired: if two node groups whose names differed only in an illegal character (`A/B` and `A:B`) both existed, the older version already overwrote one with the other on disk. Migration fixes the naming going forward but cannot recover data that was lost before it ran.
+
 ### Branching
 
 - **Create Branch** from the Branches panel
@@ -181,6 +216,10 @@ Each node tree is serialized to a JSON file containing:
 In addition, `nodes/_scene_assignments.json` records which objects use which materials (per slot) and which GN modifiers point at which node groups, so scene wiring is restored automatically on revert / branch-switch / pull / clone.
 
 On checkout or pull, NodeSync reconstructs every node tree from JSON in dependency order (nested groups first), then applies the scene-assignments map to re-attach materials and modifier groups to any empty slot. Reconstructed groups also get a fake user so they stay visible and don't linger as orphan data-blocks. Socket matching uses Blender's internal socket identifiers for stability, keeping git history clean even when sockets are reordered.
+
+Every write is atomic: content goes to a scratch file in the same directory and is renamed over the target only once it is complete. A write interrupted by a crash, a full disk or a permissions change leaves the previous version untouched instead of a truncated file that fails every later import. The same applies to textures — both Blender's image writer and a plain file copy create the destination before filling it, so a failure partway used to leave a zero-byte file behind and destroy the previous commit's copy.
+
+Failures during export are reported in the Blender info bar and named individually in the system console. Earlier versions printed them to the console only, which meant a commit where every export failed reported "No tracked node groups found in file" — the wrong diagnosis entirely.
 
 Git operations run via subprocess. No external Python dependencies required — only the standard library and Blender's `bpy`.
 
