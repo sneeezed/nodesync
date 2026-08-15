@@ -137,10 +137,10 @@ def _action(kind, src, dst, note):
 
 
 def _json_dirs(proj):
-    """(directory, is_embedded) pairs holding tracked JSON files."""
-    dirs = [(proj.nodes_dir, False), (proj.shader_dir, False)]
+    """Every directory holding tracked JSON files."""
+    dirs = [proj.nodes_dir, proj.shader_dir]
     for _collection, subdir in EMBEDDED_SHADER_OWNERS:
-        dirs.append((os.path.join(proj.shader_dir, subdir), True))
+        dirs.append(os.path.join(proj.shader_dir, subdir))
     return dirs
 
 
@@ -161,7 +161,7 @@ def _expected_json_path(proj, data):
 def _collect_image_names(proj):
     """Every image name referenced by any tracked JSON in the project."""
     names = set()
-    for directory, _embedded in _json_dirs(proj):
+    for directory in _json_dirs(proj):
         for filename in _listdir(directory):
             if not filename.endswith('.json') or filename == ASSIGNMENTS_FILENAME:
                 continue
@@ -193,7 +193,7 @@ def scan(proj) -> list:
     claimed = set()   # destinations this plan already takes
 
     # --- tracked JSON files -------------------------------------------------
-    for directory, _embedded in _json_dirs(proj):
+    for directory in _json_dirs(proj):
         for filename in _listdir(directory):
             if not filename.endswith('.json') or filename == ASSIGNMENTS_FILENAME:
                 continue

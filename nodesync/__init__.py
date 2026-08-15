@@ -253,6 +253,14 @@ def unregister():
         bpy.utils.previews.remove(_previews)
         _previews = None
 
+    # Cancel the startup scan if it has not fired yet — an in-place addon
+    # update unregisters and re-registers within the timer's interval, and a
+    # timer left pending would run against a torn-down module.
+    # Temporary, alongside nodesync/migrate.py.
+    from .operators.helpers import _scan_all_scenes_for_migration
+    if bpy.app.timers.is_registered(_scan_all_scenes_for_migration):
+        bpy.app.timers.unregister(_scan_all_scenes_for_migration)
+
     # Remove hooks first
     if _nodesync_save_post in bpy.app.handlers.save_post:
         bpy.app.handlers.save_post.remove(_nodesync_save_post)

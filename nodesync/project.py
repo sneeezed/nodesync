@@ -229,6 +229,13 @@ class NodeSyncProject:
         exported = []
         self.export_errors = []
 
+        # Clear crash leftovers from every tracked directory before anything is
+        # written.  ensure_*_dir() only covers the directory it creates, and
+        # textures/ has no ensure call on this path at all.
+        for directory in (self.nodes_dir, self.shader_dir, self.textures_dir,
+                          self.materials_dir, self.worlds_dir, self.lights_dir):
+            sweep_temp_files(directory)
+
         # Standalone node groups (Geometry + Shader)
         for ng in bpy.data.node_groups:
             if ng.type not in TRACKED_TYPES:
@@ -496,6 +503,7 @@ class NodeSyncProject:
         written = []
         seen    = set()
         self.texture_errors = []
+        sweep_temp_files(self.textures_dir)
 
         def _save_image(img):
             if img is None or img.name in seen:
@@ -504,7 +512,7 @@ class NodeSyncProject:
 
             safe_name = safe_texture_filename(img.name)
 
-            self.ensure_textures_dir()
+            os.makedirs(self.textures_dir, exist_ok=True)
             dest = os.path.join(self.textures_dir, safe_name)
 
             # Both save_render and copy2 truncate/create the destination before
