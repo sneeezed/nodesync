@@ -235,6 +235,14 @@ def register():
     if _nodesync_load_post not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_nodesync_load_post)
 
+    # 7. One-shot legacy-filename scan.  Installing an update while a project
+    #    is already open is precisely when the migration button is needed, and
+    #    no other trigger fires in that case.  Deferred via a timer because
+    #    bpy.data is not reliably readable during register().
+    #    Temporary, alongside nodesync/migrate.py.
+    from .operators.helpers import _scan_all_scenes_for_migration
+    bpy.app.timers.register(_scan_all_scenes_for_migration, first_interval=1.0)
+
     print("[NodeSync] Addon registered")
 
 

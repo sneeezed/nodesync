@@ -285,6 +285,28 @@ def _refresh_migration_status(scene, root):
         scene.nodesync_migration_pending = 0
 
 
+def _scan_all_scenes_for_migration():
+    """
+    Run the legacy-filename scan for every scene that already points at a
+    project.  Registered as a one-shot timer at addon startup: installing an
+    update while a project is open is exactly when the migration button is
+    needed, and none of the other refresh triggers (file load, project open,
+    clone, pull) fire in that situation — so without this the button could
+    never appear for the users it was written for.
+
+    Temporary, alongside nodesync/migrate.py.
+    """
+    import bpy
+    try:
+        for scene in bpy.data.scenes:
+            root = getattr(scene, 'nodesync_project_root', '').strip()
+            if root and os.path.isdir(root):
+                _refresh_migration_status(scene, root)
+    except Exception as e:
+        print(f"[NodeSync] Startup migration scan failed: {e}")
+    return None   # one-shot
+
+
 def _refresh_branches(scene, root):
     """Populate scene.nodesync_branch_list and nodesync_current_branch."""
     from ..git_ops import GitRepo

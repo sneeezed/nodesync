@@ -51,9 +51,27 @@ class NodeSyncPullCandidate(bpy.types.PropertyGroup):
     selected   : bpy.props.BoolProperty(default=True)
 
 
+def _on_project_root_changed(self, context):
+    """
+    Re-run the legacy-filename scan when the project root is edited directly.
+    The folder-browse button goes through nodesync.open_project, which already
+    rescans, but typing or pasting a path does not.
+
+    Temporary, alongside nodesync/migrate.py.
+    """
+    try:
+        from .operators.helpers import _refresh_migration_status
+        root = self.nodesync_project_root.strip()
+        if root:
+            _refresh_migration_status(self, root)
+    except Exception as e:
+        print(f"[NodeSync] Migration rescan failed: {e}")
+
+
 # Scene properties registered/unregistered by __init__.py
 SCENE_PROPS = {
     'nodesync_project_root': bpy.props.StringProperty(
+        update      = _on_project_root_changed,
         name        = 'Project Root',
         description = 'Folder containing the .nodesync config and nodes/ directory',
         subtype     = 'DIR_PATH',
