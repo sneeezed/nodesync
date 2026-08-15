@@ -123,6 +123,7 @@ def _resolve_image(image_name: str, image_filepath: str,
     Returns None if the image cannot be found or loaded.
     """
     import os
+    from .utils import safe_texture_filename
 
     # 1. Exact name match
     img = bpy.data.images.get(image_name)
@@ -131,7 +132,11 @@ def _resolve_image(image_name: str, image_filepath: str,
 
     # 2. Already loaded under same filepath
     if project_root:
-        tex_path = os.path.join(project_root, 'textures', image_name)
+        # Look up by the same sanitized name the exporter wrote the file under,
+        # not the raw data-block name — otherwise images whose name contains a
+        # '/' or no extension would never be found on disk.
+        tex_path = os.path.join(project_root, 'textures',
+                                safe_texture_filename(image_name))
         if os.path.isfile(tex_path):
             for existing in bpy.data.images:
                 if bpy.path.abspath(existing.filepath) == os.path.abspath(tex_path):

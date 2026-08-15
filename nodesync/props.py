@@ -158,6 +158,12 @@ SCENE_PROPS = {
     'nodesync_conflict_index': bpy.props.IntProperty(
         default     = 0,
     ),
+    # Legacy-filename migration (temporary — see nodesync/migrate.py)
+    'nodesync_migration_pending': bpy.props.IntProperty(
+        name        = 'Files Needing Migration',
+        description = 'Number of project files still using the pre-1.3.1 naming scheme',
+        default     = 0,
+    ),
     # Selective pull
     'nodesync_pull_candidates': bpy.props.CollectionProperty(
         type        = NodeSyncPullCandidate,

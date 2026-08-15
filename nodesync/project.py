@@ -10,6 +10,14 @@ A NodeSync project is a folder containing:
 import os
 import json
 
+from .utils import (
+    TEMP_FILE_PREFIX,
+    atomic_write_text,
+    safe_filename,
+    safe_texture_filename,
+    sweep_temp_files,
+)
+
 
 CONFIG_FILENAME = '.nodesync'
 NODES_DIRNAME   = 'nodes'
@@ -43,6 +51,11 @@ class NodeSyncProject:
         self.lights_dir    = os.path.join(self.shader_dir, LIGHTS_SUBDIR)
         self.textures_dir  = os.path.join(self.root, TEXTURES_DIRNAME)
 
+        # Populated by export_all_groups() / collect_shader_textures().
+        # 'name: reason' strings for anything that failed to write.
+        self.export_errors  = []
+        self.texture_errors = []
+
     # ------------------------------------------------------------------
     # Config
     # ------------------------------------------------------------------
@@ -60,8 +73,7 @@ class NodeSyncProject:
             return {'version': '1.0', 'tracked_groups': []}
 
     def save_config(self, cfg: dict):
-        with open(self.config_path, 'w', encoding='utf-8') as f:
-            json.dump(cfg, f, indent=2)
+        atomic_write_text(self.config_path, json.dumps(cfg, indent=2))
 
     def get_tracked_groups(self) -> list:
         return self.load_config().get('tracked_groups', [])
@@ -111,15 +123,18 @@ class NodeSyncProject:
 
     def ensure_nodes_dir(self):
         os.makedirs(self.nodes_dir, exist_ok=True)
+        sweep_temp_files(self.nodes_dir)
 
     def ensure_shader_dir(self):
         os.makedirs(self.shader_dir, exist_ok=True)
+        sweep_temp_files(self.shader_dir)
 
     def ensure_textures_dir(self):
         os.makedirs(self.textures_dir, exist_ok=True)
+        sweep_temp_files(self.textures_dir)
 
     def node_file_path(self, group_name: str, tree_type: str = 'GeometryNodeTree') -> str:
-        safe = group_name.replace('/', '_').replace('\\', '_')
+        safe = safe_filename(group_name)
         if tree_type == 'ShaderNodeTree':
             return os.path.join(self.shader_dir, safe + '.json')
         return os.path.join(self.nodes_dir, safe + '.json')
@@ -129,7 +144,7 @@ class NodeSyncProject:
         File path for an embedded shader tree owned by a Material/World/Light.
         owner_kind is the bpy.data collection name ('materials', 'worlds', 'lights').
         """
-        safe = owner_name.replace('/', '_').replace('\\', '_')
+        safe = safe_filename(owner_name)
         subdir_map = dict(EMBEDDED_SHADER_OWNERS)
         subdir = subdir_map.get(owner_kind, owner_kind)
         return os.path.join(self.shader_dir, subdir, safe + '.json')
@@ -158,8 +173,7 @@ class NodeSyncProject:
                 if f.read() == new_content:
                     return out_path   # unchanged — skip write
 
-        with open(out_path, 'w', encoding='utf-8') as f:
-            f.write(new_content)
+        atomic_write_text(out_path, new_content)
         return out_path
 
     def export_embedded_shader(self, owner, owner_kind: str) -> str | None:
@@ -194,8 +208,7 @@ class NodeSyncProject:
                 if f.read() == new_content:
                     return out_path
 
-        with open(out_path, 'w', encoding='utf-8') as f:
-            f.write(new_content)
+        atomic_write_text(out_path, new_content)
         return out_path
 
     def export_all_groups(self) -> list:
@@ -206,10 +219,15 @@ class NodeSyncProject:
           Material shader trees      → nodes/shader/materials/<name>.json
           World shader trees         → nodes/shader/worlds/<name>.json
           Light shader trees         → nodes/shader/lights/<name>.json
-        Returns a list of human-readable names that were exported.
+        Returns a list of human-readable names that were exported.  Anything
+        that failed is recorded in self.export_errors (reset on every call) as
+        a list of 'name: reason' strings — callers MUST surface it, otherwise a
+        run where every export failed is indistinguishable from a file with no
+        node groups in it.
         """
         import bpy
         exported = []
+        self.export_errors = []
 
         # Standalone node groups (Geometry + Shader)
         for ng in bpy.data.node_groups:
@@ -220,6 +238,7 @@ class NodeSyncProject:
                 exported.append(ng.name)
             except Exception as e:
                 print(f"[NodeSync] Failed to export '{ng.name}': {e}")
+                self.export_errors.append(f"{ng.name}: {e}")
 
         # Embedded shader trees (Material / World / Light)
         for collection_name, _subdir in EMBEDDED_SHADER_OWNERS:
@@ -233,11 +252,13 @@ class NodeSyncProject:
                 except Exception as e:
                     print(f"[NodeSync] Failed to export "
                           f"{collection_name[:-1]} '{owner.name}': {e}")
+                    self.export_errors.append(f"{owner.name}: {e}")
 
         try:
             self.export_scene_assignments()
         except Exception as e:
             print(f"[NodeSync] Failed to export scene assignments: {e}")
+            self.export_errors.append(f"scene assignments: {e}")
 
         return exported
 
@@ -281,8 +302,7 @@ class NodeSyncProject:
                 if f.read() == new_content:
                     return self.assignments_path
 
-        with open(self.assignments_path, 'w', encoding='utf-8') as f:
-            f.write(new_content)
+        atomic_write_text(self.assignments_path, new_content)
         return self.assignments_path
 
     def apply_scene_assignments(self) -> tuple[int, int]:
@@ -465,38 +485,52 @@ class NodeSyncProject:
         standalone shader groups AND embedded Material/World/Light trees —
         into the textures/ folder.  Packed/generated images are written via
         image.save_render; external images are copied verbatim.
-        Returns absolute paths written.
+        Returns absolute paths written.  Failures are recorded in
+        self.texture_errors (reset on every call); they used to be printed to
+        the system console only, so a commit where no texture saved at all
+        looked completely successful.
         """
         import bpy
         import shutil
 
         written = []
         seen    = set()
+        self.texture_errors = []
 
         def _save_image(img):
             if img is None or img.name in seen:
                 return
             seen.add(img.name)
 
-            safe_name = img.name.replace('/', '_').replace('\\', '_')
-            if not os.path.splitext(safe_name)[1]:
-                safe_name += '.png'
+            safe_name = safe_texture_filename(img.name)
 
             self.ensure_textures_dir()
             dest = os.path.join(self.textures_dir, safe_name)
 
+            # Both save_render and copy2 truncate/create the destination before
+            # they write it, so a failure partway used to leave a zero-byte or
+            # half-copied texture in the repo — and clobber the good copy from
+            # the previous commit.  Write to a scratch file and rename it into
+            # place instead: on failure `dest` is never touched at all.
+            scratch = os.path.join(self.textures_dir, TEMP_FILE_PREFIX + safe_name)
             try:
                 if img.packed_file is not None or img.source == 'GENERATED':
-                    img.save_render(filepath=dest)
+                    img.save_render(filepath=scratch)
                 else:
                     src = bpy.path.abspath(img.filepath, library=img.library)
                     if src and os.path.isfile(src):
-                        shutil.copy2(src, dest)
+                        shutil.copy2(src, scratch)
                     else:
-                        img.save_render(filepath=dest)
+                        img.save_render(filepath=scratch)
+                os.replace(scratch, dest)
                 written.append(dest)
             except Exception as e:
+                try:
+                    os.remove(scratch)
+                except OSError:
+                    pass
                 print(f"[NodeSync] Could not save texture '{img.name}': {e}")
+                self.texture_errors.append(f"{img.name}: {e}")
 
         def _walk_tree(nt):
             if nt is None:

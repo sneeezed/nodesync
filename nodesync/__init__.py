@@ -163,6 +163,9 @@ def _nodesync_save_post(*args):
         if exported:
             print(f"[NodeSync] Auto-exported {len(exported)} group(s): "
                   f"{', '.join(exported)}")
+        if proj.export_errors:
+            print(f"[NodeSync] {len(proj.export_errors)} group(s) failed to "
+                  f"auto-export: {'; '.join(proj.export_errors)}")
     except Exception as e:
         # Never let an exception crash Blender's save operation
         print(f"[NodeSync] Auto-export error: {e}")
@@ -182,13 +185,15 @@ def _nodesync_load_post(*args):
         if not os.path.isfile(os.path.join(root, '.nodesync')):
             return
         from .project import NodeSyncProject
-        from .operators.helpers import _refresh_history, _refresh_branches
+        from .operators.helpers import (_refresh_history, _refresh_branches,
+                                        _refresh_migration_status)
         proj = NodeSyncProject(root)
         saved_url = proj.get_remote_url()
         if saved_url:
             scene.nodesync_remote_url = saved_url
         _refresh_branches(scene, root)
         _refresh_history(scene, root)
+        _refresh_migration_status(scene, root)
         print(f"[NodeSync] Auto-loaded project from {root}")
     except Exception as e:
         print(f"[NodeSync] Auto-load error: {e}")

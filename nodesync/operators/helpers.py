@@ -103,8 +103,10 @@ def _resolve_tree_rel_path(node_tree) -> tuple[str, str]:
     if node_tree is None:
         return ('', '')
 
+    from ..utils import safe_filename
+
     bl_idname = getattr(node_tree, 'bl_idname', '')
-    safe_tree_name = node_tree.name.replace('/', '_').replace('\\', '_')
+    safe_tree_name = safe_filename(node_tree.name)
 
     if bl_idname == 'GeometryNodeTree':
         return (f'nodes/{safe_tree_name}.json', node_tree.name)
@@ -121,7 +123,7 @@ def _resolve_tree_rel_path(node_tree) -> tuple[str, str]:
                 continue
             for owner in collection:
                 if getattr(owner, 'use_nodes', False) and owner.node_tree is node_tree:
-                    safe_owner = owner.name.replace('/', '_').replace('\\', '_')
+                    safe_owner = safe_filename(owner.name)
                     return (
                         f'nodes/shader/{subdir}/{safe_owner}.json',
                         f'{owner.name} ({collection_name[:-1]})',
@@ -262,6 +264,25 @@ def _refresh_history(scene, root, filter_hashes=None):
         item.branch_name  = owner
         item.color_index  = idx
         item.branch_color = color
+
+
+def _refresh_migration_status(scene, root):
+    """
+    Cache how many files in `root` still use the pre-1.3.1 naming scheme, so
+    the panel can show the migration button without doing a filesystem scan on
+    every redraw.  Only called at project open/load, after a pull, and after a
+    migration — the answer cannot change at any other time.
+
+    Temporary, alongside nodesync/migrate.py.
+    """
+    try:
+        from ..project import NodeSyncProject
+        from ..        import migrate
+        scene.nodesync_migration_pending = migrate.count_pending(
+            NodeSyncProject(root))
+    except Exception as e:
+        print(f"[NodeSync] Migration scan failed: {e}")
+        scene.nodesync_migration_pending = 0
 
 
 def _refresh_branches(scene, root):
