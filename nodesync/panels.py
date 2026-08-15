@@ -166,6 +166,22 @@ class NODE_PT_nodesync_project(bpy.types.Panel):
             col.operator('nodesync.clone_from_url', icon='IMPORT')
             col.operator('nodesync.init_project', text='Init New Project', icon='NEWFOLDER')
         else:
+            # Legacy filenames detected — offer the one-shot migration.  The
+            # count is cached by _refresh_migration_status(); never scan the
+            # filesystem from draw(), which runs on every redraw.
+            # Temporary, alongside nodesync/migrate.py.
+            pending = scene.nodesync_migration_pending
+            if pending:
+                box = layout.box()
+                box.alert = True
+                box.label(text=f'{pending} file(s) use an old naming scheme',
+                          icon='ERROR')
+                box.label(text='Some may be undeletable on Windows.')
+                row = box.row()
+                row.scale_y = 1.2
+                row.operator('nodesync.migrate_filenames',
+                             text='Migrate Project Files', icon='FILE_REFRESH')
+
             # Project is loaded — show Git remote section
             layout.separator()
             layout.label(text='Git Remote', icon='URL')

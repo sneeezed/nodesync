@@ -9,6 +9,7 @@ Sub-modules:
   remote_ops      — clone_from_url, set_remote, push, pull, confirm_pull_changes
   branch_ops      — create_branch, switch_branch
   conflict_ops    — resolve_conflict, complete_merge, abort_merge
+  migrate_ops     — migrate_filenames (temporary; see nodesync/migrate.py)
 """
 
 from .project_ops  import classes as _project_classes
@@ -17,6 +18,7 @@ from .diff_ops     import classes as _diff_classes
 from .remote_ops   import classes as _remote_classes
 from .branch_ops   import classes as _branch_classes
 from .conflict_ops import classes as _conflict_classes
+from .migrate_ops  import classes as _migrate_classes
 
 classes = (
     _project_classes
@@ -25,4 +27,5 @@ classes = (
     + _remote_classes
     + _branch_classes
     + _conflict_classes
+    + _migrate_classes
 )

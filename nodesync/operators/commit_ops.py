@@ -65,10 +65,29 @@ class NODESYNC_OT_commit(bpy.types.Operator):
             return {'CANCELLED'}
 
         # Main-thread-only: export node groups to JSON before staging.
-        exported = proj.export_all_groups()
+        exported     = proj.export_all_groups()
+        export_errors = proj.export_errors
         if not exported:
-            self.report({'WARNING'}, "No tracked node groups found in file")
+            # Distinguish "this .blend has nothing to track" from "every single
+            # export blew up".  Both used to report the former, which sent
+            # users looking for a problem in the wrong place entirely — the
+            # actual traceback only reached the system console, which most
+            # users never open.
+            if export_errors:
+                self.report(
+                    {'ERROR'},
+                    f"All {len(export_errors)} node tree(s) failed to export "
+                    f"({export_errors[0]}). See Window > Toggle System Console "
+                    f"for the full list.")
+            else:
+                self.report({'WARNING'}, "No tracked node groups found in file")
             return {'CANCELLED'}
+
+        if export_errors:
+            self.report(
+                {'WARNING'},
+                f"{len(export_errors)} node tree(s) failed to export and are "
+                f"NOT in this commit ({export_errors[0]}). See System Console.")
 
         prefs = _get_addon_prefs(context)
         if prefs is not None:
@@ -86,6 +105,13 @@ class NODESYNC_OT_commit(bpy.types.Operator):
         if track_textures:
             try:
                 textures_written = len(proj.collect_shader_textures())
+                # Per-image failures are caught inside collect_shader_textures,
+                # so this call almost never raises — without checking the error
+                # list a commit where every texture failed looked clean.
+                if proj.texture_errors:
+                    texture_warning = (
+                        f"{len(proj.texture_errors)} texture(s) not saved "
+                        f"({proj.texture_errors[0]})")
             except Exception as e:
                 texture_warning = str(e)
 

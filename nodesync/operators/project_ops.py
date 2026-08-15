@@ -5,7 +5,8 @@ Operators for initializing and opening NodeSync projects.
 import bpy
 import os
 
-from .helpers import _get_project, _refresh_branches, _refresh_history
+from .helpers import (_get_project, _refresh_branches, _refresh_history,
+                      _refresh_migration_status)
 
 
 class NODESYNC_OT_init_project(bpy.types.Operator):
@@ -66,6 +67,7 @@ class NODESYNC_OT_init_project(bpy.types.Operator):
 
         _refresh_branches(scene, root)
         _refresh_history(scene, root)
+        _refresh_migration_status(scene, root)
         return {'FINISHED'}
 
 
@@ -98,6 +100,7 @@ class NODESYNC_OT_open_project(bpy.types.Operator):
                 context.scene.nodesync_remote_url = saved_url
             _refresh_branches(context.scene, root)
             _refresh_history(context.scene, root)
+            _refresh_migration_status(context.scene, root)
             self.report({'INFO'}, f"Opened: {root}")
         else:
             self.report({'INFO'}, "Folder set — press 'Init New Project' to initialize")

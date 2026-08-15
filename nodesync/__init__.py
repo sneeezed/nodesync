@@ -163,6 +163,9 @@ def _nodesync_save_post(*args):
         if exported:
             print(f"[NodeSync] Auto-exported {len(exported)} group(s): "
                   f"{', '.join(exported)}")
+        if proj.export_errors:
+            print(f"[NodeSync] {len(proj.export_errors)} group(s) failed to "
+                  f"auto-export: {'; '.join(proj.export_errors)}")
     except Exception as e:
         # Never let an exception crash Blender's save operation
         print(f"[NodeSync] Auto-export error: {e}")
@@ -182,13 +185,15 @@ def _nodesync_load_post(*args):
         if not os.path.isfile(os.path.join(root, '.nodesync')):
             return
         from .project import NodeSyncProject
-        from .operators.helpers import _refresh_history, _refresh_branches
+        from .operators.helpers import (_refresh_history, _refresh_branches,
+                                        _refresh_migration_status)
         proj = NodeSyncProject(root)
         saved_url = proj.get_remote_url()
         if saved_url:
             scene.nodesync_remote_url = saved_url
         _refresh_branches(scene, root)
         _refresh_history(scene, root)
+        _refresh_migration_status(scene, root)
         print(f"[NodeSync] Auto-loaded project from {root}")
     except Exception as e:
         print(f"[NodeSync] Auto-load error: {e}")
@@ -230,6 +235,14 @@ def register():
     if _nodesync_load_post not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_nodesync_load_post)
 
+    # 7. One-shot legacy-filename scan.  Installing an update while a project
+    #    is already open is precisely when the migration button is needed, and
+    #    no other trigger fires in that case.  Deferred via a timer because
+    #    bpy.data is not reliably readable during register().
+    #    Temporary, alongside nodesync/migrate.py.
+    from .operators.helpers import _scan_all_scenes_for_migration
+    bpy.app.timers.register(_scan_all_scenes_for_migration, first_interval=1.0)
+
     print("[NodeSync] Addon registered")
 
 
@@ -239,6 +252,14 @@ def unregister():
         import bpy.utils.previews
         bpy.utils.previews.remove(_previews)
         _previews = None
+
+    # Cancel the startup scan if it has not fired yet — an in-place addon
+    # update unregisters and re-registers within the timer's interval, and a
+    # timer left pending would run against a torn-down module.
+    # Temporary, alongside nodesync/migrate.py.
+    from .operators.helpers import _scan_all_scenes_for_migration
+    if bpy.app.timers.is_registered(_scan_all_scenes_for_migration):
+        bpy.app.timers.unregister(_scan_all_scenes_for_migration)
 
     # Remove hooks first
     if _nodesync_save_post in bpy.app.handlers.save_post:

@@ -11,6 +11,7 @@ from .helpers import (
     _get_addon_prefs,
     _refresh_branches,
     _refresh_history,
+    _refresh_migration_status,
     _pending_pull_changes,
     _remove_node_data,
     _schedule_sync_status_clear,
@@ -111,6 +112,7 @@ class NODESYNC_OT_clone_from_url(bpy.types.Operator):
 
         _refresh_branches(scene, target_dir)
         _refresh_history(scene, target_dir)
+        _refresh_migration_status(scene, target_dir)
 
         self.report({'INFO'},
                     f"Cloned into '{target_dir}' — imported {len(imported)} group(s)")
@@ -482,6 +484,7 @@ class NODESYNC_OT_select_pull_groups(bpy.types.Operator):
 
         _refresh_branches(scene, proj.root)
         _refresh_history(scene, proj.root)
+        _refresh_migration_status(scene, proj.root)
         scene.nodesync_pull_candidates.clear()
 
         applied  = len(reimported) + len(removed)
